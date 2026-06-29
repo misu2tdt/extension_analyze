@@ -37,6 +37,21 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
+  worker:
+    build: ./worker
+    container_name: extanalyze-worker
+    volumes:
+      - ./worker:/app
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://extanalyze:devpassword@postgres:5432/extanalyze
+    depends_on:
+      - redis
+      - postgres
+    restart: unless-stopped
+    
 volumes:
   postgres-data:
   redis-data:
+
+  
