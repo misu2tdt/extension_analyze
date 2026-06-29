@@ -6,4 +6,37 @@ services:
       - "8000:8000"
     volumes:
       - ./api:/app
+    environment:
+      DATABASE_URL: postgresql://extanalyze:devpassword@postgres:5432/extanalyze
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
     restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: extanalyze-postgres
+    environment:
+      POSTGRES_USER: extanalyze
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: extanalyze
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: extanalyze-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
