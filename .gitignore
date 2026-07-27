@@ -1,23 +1,37 @@
-# Python
+# ===== AN TOAN: KHONG BAO GIO commit len public repo =====
+# Malware samples that
+malware_samples/
+*.crx
+!sandbox/canary/**        # ngoai le: canary la extension tu viet, lanh tinh - VAN commit
+
+# ===== Artifacts sinh ra khi chay =====
+sandbox/output/
+**/output/
+**/chrome-profile/
+*.pcap
+events.json
+capture.pcap
+
+# ===== Claude Code (workdir noi bo, khong phai san pham) =====
+.claude/
+
+# ===== Python =====
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*.egg-info/
+.pytest_cache/
 .venv/
 venv/
-.env
-*.egg-info/
+env/
 
-# IDE
+# ===== Bi mat - KHONG commit =====
+.env
+.env.*
+*.pem
+*.key
+
+# ===== IDE / OS =====
 .vscode/
 .idea/
-*.swp
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Project specific
-data/
-logs/
-*.crx
-*.pcap
