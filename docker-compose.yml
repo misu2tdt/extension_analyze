@@ -9,9 +9,13 @@ services:
     environment:
       DATABASE_URL: postgresql://extanalyze:devpassword@postgres:5432/extanalyze
       REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin123
     depends_on:
       - postgres
       - redis
+      - minio
     restart: unless-stopped
 
   postgres:
@@ -42,16 +46,38 @@ services:
     container_name: extanalyze-worker
     volumes:
       - ./worker:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /run/desktop/mnt/host/c/extanalyze_shared:/shared
     environment:
-      REDIS_URL: redis://redis:6379/0
       DATABASE_URL: postgresql://extanalyze:devpassword@postgres:5432/extanalyze
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin123
+      SANDBOX_IMAGE: extanalyze-sandbox:latest
+      SHARED_TMP: /shared
+      HOST_SHARED_TMP: /run/desktop/mnt/host/c/extanalyze_shared
     depends_on:
       - redis
       - postgres
+      - minio
     restart: unless-stopped
-    
+
+  minio:
+    image: minio/minio:latest
+    container_name: extanalyze-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:
-
-  
+  minio-data:
