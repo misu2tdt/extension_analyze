@@ -32,6 +32,37 @@ def build_crx(src_dir: Path, crx_path: Path):
     crx_path.write_bytes(crx)
 
 
+def run_timeout_check():
+    """Ep honeypot_pages timeout (budget=1s) de kiem chung lifecycle bao partial dung."""
+    import os
+    out2 = Path("/tmp/smoke_out_timeout")
+    env = dict(os.environ, PHASE_BUDGET_HONEYPOT_PAGES="1")
+    subprocess.run(
+        ["xvfb-run", "-a", "--server-args=-screen 0 1280x720x24",
+         "python3", str(SANDBOX / "analyze.py"),
+         "--crx", str(CRX_PATH), "--output", str(out2), "--timeout", "90"],
+        check=True, timeout=200, env=env,
+    )
+    events = json.loads((out2 / "events.json").read_text(encoding="utf-8"))
+    rs = events.get("run_status", {})
+    phases = {p["name"]: p["status"] for p in events.get("phases", [])}
+
+    checks = [
+        ("run_status = partial", rs.get("status") == "partial"),
+        ("honeypot_pages = timed_out", phases.get("honeypot_pages") == "timed_out"),
+        ("load = completed", phases.get("load") == "completed"),
+    ]
+    print("\n=== LIFECYCLE TIMEOUT CHECK ===")
+    failed = 0
+    for name, ok in checks:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}")
+        failed += 0 if ok else 1
+    if failed:
+        print("  run_status:", json.dumps(rs, ensure_ascii=False))
+        print("  phases:", json.dumps(phases, ensure_ascii=False))
+    return failed
+
+
 def main():
     honey = subprocess.Popen(
         ["python3", "-m", "http.server", "8888", "--directory", str(HONEY_DIR)],
@@ -84,8 +115,10 @@ def main():
             hits = events.get("extension_storage", {}).get("honeypot_hits", [])
             print(json.dumps(hits, indent=2, ensure_ascii=False))
 
-        print(f"\n{len(checks) - failed}/{len(checks)} sensor OK")
-        sys.exit(1 if failed else 0)
+        tf = run_timeout_check()
+        print(f"\n{len(checks) - failed}/{len(checks)} sensor OK, "
+              f"lifecycle timeout check: {'PASS' if tf == 0 else 'FAIL'}")
+        sys.exit(1 if (failed or tf) else 0)
     finally:
         honey.terminate()
 
