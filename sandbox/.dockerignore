@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+test.crx
+batch_test.bat
+output/
+*.pcap
