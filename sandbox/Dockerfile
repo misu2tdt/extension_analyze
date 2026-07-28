@@ -22,6 +22,8 @@ COPY entrypoint.sh /sandbox/entrypoint.sh
 COPY honey_pages/ /sandbox/honey_pages/
 COPY canary/ /sandbox/canary/
 COPY smoke_test.py /sandbox/smoke_test.py
+COPY config.py /sandbox/config.py
+COPY honeypot.py /sandbox/honeypot.py
 RUN chmod +x /sandbox/entrypoint.sh
 
 # Honeypot environment variables — nếu extension exfil các biến này,

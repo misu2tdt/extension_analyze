@@ -8,36 +8,17 @@ import json
 import struct
 import zipfile
 import re
+import config
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 from playwright.async_api import async_playwright
-
-# ==================== CAU HINH ====================
-PER_PAGE_TIMEOUT_MS = 6000
-SOFT_TIMEOUT_MARGIN_S = 30       # tru hao de kip ghi ket qua + doc storage
-BROWSER_SOFT_TIMEOUT_S = 90      # mac dinh, se bi ghi de boi --timeout
-DWELL_MS = 3000                  # thoi gian o lai moi trang cho extension hanh dong
-PROFILE_DIR = "/tmp/chrome-profile"
-REMOTE_DEBUG_PORT = 9222   # cho CDP session bat network service worker MV3
-MAX_BODY_LEN = 2000
-
-# Cac phase cua mot luot phan tich, theo dung thu tu.
-PHASE_NAMES = ["load", "honeypot_pages", "target_matched",
-               "extension_pages", "delayed_observation"]
-
-TEST_URLS = [
-    "http://localhost:8888/fake_bank.html",
-    "http://localhost:8888/fake_gmail.html",
-    "https://example.com",
-]
-
-HONEYPOT_MARKERS = [
-    "HONEYPOT", "sk-HONEYPOT", "ghp_HONEYPOT", "AKIAHONEYPOT",
-    "HONEYPOT-PASSWORD", "HONEYPOT-OTP", "HONEYPOT-ACCT", "honeyuser",
-]
-
-INTERESTING_HEADERS = ["authorization", "cookie", "x-api-key", "x-auth-token"]
+from config import (
+    PER_PAGE_TIMEOUT_MS, SOFT_TIMEOUT_MARGIN_S,
+    DWELL_MS, PROFILE_DIR, REMOTE_DEBUG_PORT, MAX_BODY_LEN,
+    PHASE_NAMES, TEST_URLS, INTERESTING_HEADERS,
+)
+from honeypot import HONEYPOT_MARKERS, _find_honeypot
 
 
 # ==================== TIEN ICH ====================
@@ -76,10 +57,7 @@ def _host_of(url: str) -> str:
         return ""
 
 
-def _find_honeypot(text: str):
-    if not text:
-        return []
-    return [m for m in HONEYPOT_MARKERS if m in text]
+
 
 
 # ============ CAM BIEN 1+2: NETWORK + PAYLOAD SAU ============
@@ -646,11 +624,11 @@ async def analyze_extension(crx_path: str, output_dir: str):
     try:
         await asyncio.wait_for(
             _run_browser(ext_dir, events, output, save_events),
-            timeout=BROWSER_SOFT_TIMEOUT_S,
+            timeout=config.BROWSER_SOFT_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
-        print(f"[Analyze] Browser SOFT TIMEOUT ({BROWSER_SOFT_TIMEOUT_S}s)", flush=True)
-        events["errors"].append(f"browser_soft_timeout_{BROWSER_SOFT_TIMEOUT_S}s")
+        print(f"[Analyze] Browser SOFT TIMEOUT ({config.BROWSER_SOFT_TIMEOUT_S}s)", flush=True)
+        events["errors"].append(f"browser_soft_timeout_{config.BROWSER_SOFT_TIMEOUT_S}s")
     except Exception as e:
         print(f"[Analyze] Browser error: {str(e)[:150]}", flush=True)
         events["errors"].append(f"browser_error: {str(e)[:150]}")
@@ -671,7 +649,6 @@ async def analyze_extension(crx_path: str, output_dir: str):
 
 
 def main():
-    global BROWSER_SOFT_TIMEOUT_S
     parser = argparse.ArgumentParser()
     parser.add_argument("--crx", required=True)
     parser.add_argument("--output", required=True)
@@ -679,8 +656,9 @@ def main():
                         help="Ngan sach thoi gian TONG (giay) do shell cap")
     args = parser.parse_args()
 
-    BROWSER_SOFT_TIMEOUT_S = max(30, args.timeout - SOFT_TIMEOUT_MARGIN_S)
-    print(f"[Analyze] Budget={args.timeout}s, soft={BROWSER_SOFT_TIMEOUT_S}s", flush=True)
+    config.BROWSER_SOFT_TIMEOUT_S = max(30, args.timeout - SOFT_TIMEOUT_MARGIN_S)
+    print(f"[Analyze] Budget={args.timeout}s, soft={config.BROWSER_SOFT_TIMEOUT_S}s",
+          flush=True)
 
     asyncio.run(analyze_extension(args.crx, args.output))
 
