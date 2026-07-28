@@ -9,7 +9,6 @@ from crx import extract_crx
 import re
 import config
 from pathlib import Path
-from urllib.parse import urlparse
 from playwright.async_api import async_playwright
 from config import (
     PER_PAGE_TIMEOUT_MS, SOFT_TIMEOUT_MARGIN_S,
@@ -17,15 +16,7 @@ from config import (
     PHASE_NAMES, TEST_URLS, INTERESTING_HEADERS,
 )
 from honeypot import HONEYPOT_MARKERS, _find_honeypot
-
-
-def _host_of(url: str) -> str:
-    try:
-        return (urlparse(url).hostname or "").lower()
-    except Exception:
-        return ""
-
-
+from utils import _host_of
 
 
 # ============ CAM BIEN 1+2: NETWORK + PAYLOAD SAU ============
