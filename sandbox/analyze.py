@@ -2,6 +2,7 @@ import asyncio
 import urllib.request
 import websockets
 import time
+import os
 import asyncio
 import argparse
 import json
@@ -22,8 +23,11 @@ PROFILE_DIR = "/tmp/chrome-profile"
 REMOTE_DEBUG_PORT = 9222   # cho CDP session bat network service worker MV3
 MAX_BODY_LEN = 2000
 
-# Moc thoi gian, set khi browser launch => moi request co truong "t" cho beaconing.
+# Moc thoi gian cua mot luot chay; set khi browser launch.
 T0 = None
+# Cac phase cua mot luot phan tich, theo dung thu tu.
+PHASE_NAMES = ["load", "honeypot_pages", "target_matched",
+               "extension_pages", "delayed_observation"]
 
 TEST_URLS = [
     "http://localhost:8888/fake_bank.html",
@@ -90,6 +94,7 @@ def _record_request(req, events, origin: str):
         "origin": origin,
         "host": _host_of(req.url),
     }
+    entry["phase"] = events.get("_current_phase")
 
     if T0 is not None:
         entry["t"] = round(time.monotonic() - T0, 3)
@@ -187,6 +192,7 @@ def _record_cdp_request(rq, events):
         "origin": "service_worker",
         "host": _host_of(url),
     }
+    entry["phase"] = events.get("_current_phase")
     if body:
         entry["post_data"] = body[:MAX_BODY_LEN]
         entry["post_data_len"] = len(body)
@@ -454,8 +460,75 @@ async def _probe_extension_pages(context, events, output):
                     except Exception:
                         pass
 
+async def _phase_load(context, events):
+    """Phase load: gan sensor, cho service worker dang ky."""
+    await _setup_context_observers(context, events)
+    await _setup_dom_sensor(context, events)
+    await asyncio.sleep(3)                    # cho SW kip dang ky
+    seen_sw = {s.get("url") for s in events["service_workers"]}
+    for sw in context.service_workers:
+        if sw.url not in seen_sw:
+            events["service_workers"].append({"url": sw.url})
+            seen_sw.add(sw.url)
+
+
+async def _phase_target_matched(context, events):
+    """KHUNG RONG - block sau se cai logic chon trang khop manifest.
+    Hien tai return ngay de cau truc phase hoan chinh."""
+    events["target_matched_note"] = "not_implemented_yet"
+    return
+
+def _phase_budget(name, default):
+    """Ngan sach phase, cho phep override qua bien moi truong (khong can rebuild)."""
+    try:
+        return int(os.environ.get(f"PHASE_BUDGET_{name.upper()}", default))
+    except ValueError:
+        return default
+
+
+async def _run_phase(name, coro, budget_s, events):
+    """Boc mot phase: cap ngan sach, bat loi/timeout, ghi trang thai."""
+    rec = {"name": name, "status": "running", "budget_s": budget_s,
+           "t_start": round(time.monotonic() - T0, 2), "t_end": None, "reason": None}
+    events["phases"].append(rec)
+    events["_current_phase"] = name          # de sensor gan "phase" vao event
+    try:
+        await asyncio.wait_for(coro, timeout=budget_s)
+        rec["status"] = "completed"
+    except asyncio.TimeoutError:
+        rec["status"] = "timed_out"
+        rec["reason"] = f"vuot ngan sach {budget_s}s"
+    except Exception as e:
+        rec["status"] = "failed"
+        rec["reason"] = str(e)[:150]
+    finally:
+        rec["t_end"] = round(time.monotonic() - T0, 2)
+    print(f"[Phase] {name}: {rec['status']} "
+          f"({rec['t_start']}s - {rec['t_end']}s)", flush=True)
+    return rec["status"]
+
+
+def _finalize_run_status(events):
+    """Suy ra run_status tong tu trang thai cac phase."""
+    phases = events.get("phases", [])
+    by = {p["name"]: p for p in phases}
+    load = by.get("load")
+    completed = sum(1 for p in phases if p["status"] == "completed")
+    if load and load["status"] == "failed":
+        status, reason = "failed", "load failed: " + (load.get("reason") or "")
+    elif len(phases) == len(PHASE_NAMES) and all(p["status"] == "completed" for p in phases):
+        status, reason = "complete", None
+    else:
+        bad = [p["name"] for p in phases if p["status"] in ("timed_out", "failed", "skipped")]
+        status, reason = "partial", ", ".join(f"{n} {by[n]['status']}" for n in bad)
+    events["run_status"] = {"status": status, "reason": reason,
+                            "phases_completed": completed,
+                            "phases_total": len(PHASE_NAMES)}
+    print(f"[Run] status={status} ({completed}/{len(PHASE_NAMES)} phases) reason={reason}",
+          flush=True)
 
 async def _run_browser(ext_dir, events, output, save_events):
+    global T0
     async with async_playwright() as p:
         context = await p.chromium.launch_persistent_context(
             user_data_dir=PROFILE_DIR,
@@ -469,34 +542,43 @@ async def _run_browser(ext_dir, events, output, save_events):
                 f"--remote-debugging-port={REMOTE_DEBUG_PORT}",
             ],
         )
+        T0 = time.monotonic()
+        events["phases"] = []
 
-        await _setup_context_observers(context, events)
-        await _setup_dom_sensor(context, events)
-
-        # CAM BIEN 1b: bat network service worker qua CDP (chay nen suot phien).
+        # CDP SW sensor chay nen suot ca luot (vuot qua ranh gioi cac phase).
         stop_cdp = asyncio.Event()
         cdp_task = asyncio.create_task(_cdp_sw_sensor(events, stop_cdp))
 
-        # Cho service worker cua extension kip dang ky
-        await asyncio.sleep(3)
-        seen_sw = {s.get("url") for s in events["service_workers"]}
-        for sw in context.service_workers:
-            if sw.url not in seen_sw:
-                events["service_workers"].append({"url": sw.url})
-                seen_sw.add(sw.url)
-
-        await _visit_pages(context, events, output, save_events)
-        await _probe_extension_pages(context, events, output)
-
-        # Cho them de bat hanh vi tre (delayed trigger)
-        await asyncio.sleep(3)
-
-        stop_cdp.set()
         try:
-            await asyncio.wait_for(cdp_task, timeout=5)
-        except Exception:
-            cdp_task.cancel()
-        await context.close()
+            status = await _run_phase(
+                "load", _phase_load(context, events),
+                _phase_budget("load", 15), events)
+
+            if status != "failed":
+                await _run_phase(
+                    "honeypot_pages",
+                    _visit_pages(context, events, output, save_events),
+                    _phase_budget("honeypot_pages", 60), events)
+                await _run_phase(
+                    "target_matched",
+                    _phase_target_matched(context, events),
+                    _phase_budget("target_matched", 40), events)
+                await _run_phase(
+                    "extension_pages",
+                    _probe_extension_pages(context, events, output),
+                    _phase_budget("extension_pages", 30), events)
+                await _run_phase(
+                    "delayed_observation",
+                    asyncio.sleep(3),
+                    _phase_budget("delayed_observation", 15), events)
+        finally:
+            stop_cdp.set()
+            try:
+                await asyncio.wait_for(cdp_task, timeout=5)
+            except Exception:
+                cdp_task.cancel()
+            _finalize_run_status(events)
+            await context.close()
 
 
 # ==================== TONG HOP ====================
