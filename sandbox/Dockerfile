@@ -25,6 +25,7 @@ COPY smoke_test.py /sandbox/smoke_test.py
 COPY config.py /sandbox/config.py
 COPY honeypot.py /sandbox/honeypot.py
 RUN chmod +x /sandbox/entrypoint.sh
+COPY crx.py /sandbox/crx.py
 
 # Honeypot environment variables — nếu extension exfil các biến này,
 # ta thấy chuỗi HONEYPOT trong outgoing traffic => bằng chứng malicious tuyệt đối
