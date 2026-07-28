@@ -3,7 +3,6 @@ import urllib.request
 import websockets
 import time
 import os
-import asyncio
 import argparse
 import json
 import struct
@@ -23,8 +22,6 @@ PROFILE_DIR = "/tmp/chrome-profile"
 REMOTE_DEBUG_PORT = 9222   # cho CDP session bat network service worker MV3
 MAX_BODY_LEN = 2000
 
-# Moc thoi gian cua mot luot chay; set khi browser launch.
-T0 = None
 # Cac phase cua mot luot phan tich, theo dung thu tu.
 PHASE_NAMES = ["load", "honeypot_pages", "target_matched",
                "extension_pages", "delayed_observation"]
@@ -96,8 +93,8 @@ def _record_request(req, events, origin: str):
     }
     entry["phase"] = events.get("_current_phase")
 
-    if T0 is not None:
-        entry["t"] = round(time.monotonic() - T0, 3)
+    if events.get("_t0") is not None:
+        entry["t"] = round(time.monotonic() - events["_t0"], 3)
 
     body = None
     try:
@@ -489,7 +486,7 @@ def _phase_budget(name, default):
 async def _run_phase(name, coro, budget_s, events):
     """Boc mot phase: cap ngan sach, bat loi/timeout, ghi trang thai."""
     rec = {"name": name, "status": "running", "budget_s": budget_s,
-           "t_start": round(time.monotonic() - T0, 2), "t_end": None, "reason": None}
+           "t_start": round(time.monotonic() - events["_t0"], 2), "t_end": None, "reason": None}
     events["phases"].append(rec)
     events["_current_phase"] = name          # de sensor gan "phase" vao event
     try:
@@ -502,7 +499,7 @@ async def _run_phase(name, coro, budget_s, events):
         rec["status"] = "failed"
         rec["reason"] = str(e)[:150]
     finally:
-        rec["t_end"] = round(time.monotonic() - T0, 2)
+        rec["t_end"] = round(time.monotonic() - events["_t0"], 2)
     print(f"[Phase] {name}: {rec['status']} "
           f"({rec['t_start']}s - {rec['t_end']}s)", flush=True)
     return rec["status"]
@@ -528,8 +525,8 @@ def _finalize_run_status(events):
           flush=True)
 
 async def _run_browser(ext_dir, events, output, save_events):
-    global T0
     async with async_playwright() as p:
+        events["_t0"] = time.monotonic()
         context = await p.chromium.launch_persistent_context(
             user_data_dir=PROFILE_DIR,
             headless=False,
@@ -542,7 +539,6 @@ async def _run_browser(ext_dir, events, output, save_events):
                 f"--remote-debugging-port={REMOTE_DEBUG_PORT}",
             ],
         )
-        T0 = time.monotonic()
         events["phases"] = []
 
         # CDP SW sensor chay nen suot ca luot (vuot qua ranh gioi cac phase).
