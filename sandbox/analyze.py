@@ -9,11 +9,7 @@ from playwright.async_api import async_playwright
 from config import (
     SOFT_TIMEOUT_MARGIN_S, PROFILE_DIR, REMOTE_DEBUG_PORT,
 )
-from honeypot import HONEYPOT_MARKERS, _find_honeypot
-from utils import _host_of
-from sensors.network import _record_request, _setup_context_observers
 from sensors.cdp_sw import _cdp_sw_sensor
-from sensors.dom import _setup_dom_sensor
 from sensors.storage import dump_extension_storage
 from phases.runner import _phase_budget, _run_phase, _finalize_run_status
 from phases.actions import (
