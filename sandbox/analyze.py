@@ -1,17 +1,13 @@
 import asyncio
 import time
-import os
 import argparse
 import json
 from crx import extract_crx
-import re
 import config
 from pathlib import Path
 from playwright.async_api import async_playwright
 from config import (
-    PER_PAGE_TIMEOUT_MS, SOFT_TIMEOUT_MARGIN_S,
-    DWELL_MS, PROFILE_DIR, REMOTE_DEBUG_PORT, MAX_BODY_LEN,
-    PHASE_NAMES, TEST_URLS, INTERESTING_HEADERS,
+    SOFT_TIMEOUT_MARGIN_S, PROFILE_DIR, REMOTE_DEBUG_PORT,
 )
 from honeypot import HONEYPOT_MARKERS, _find_honeypot
 from utils import _host_of

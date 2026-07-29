@@ -1,11 +1,11 @@
 import asyncio
 import time
+import os
 from config import PHASE_NAMES
 
 
 def _phase_budget(name, default):
     """Ngan sach phase, cho phep override qua bien moi truong (khong can rebuild)."""
-    import os
     try:
         return int(os.environ.get(f"PHASE_BUDGET_{name.upper()}", default))
     except ValueError:
