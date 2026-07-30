@@ -174,29 +174,39 @@ def build_behavioral_report(events: dict) -> dict:
     }
 
 
-def compute_risk_score(report: dict) -> tuple:
-    """Rule-based scoring. Tra ve (score 0-100, level)."""
+# Trong so corroboration khi ket hop static & dynamic.
+# Chon trong khoang defensible [0.2, 0.4]: du de thuong "ca hai truc cung xau"
+# nhung < 0.5 nen khong lan at truc chinh. Tham so tunable, kiem o chuong thuc nghiem.
+CORROBORATION_COEF = 0.3
+
+# Nguong muc do, neo theo dai CVSS v3 (x10 sang thang 100).
+LEVEL_THRESHOLDS = [(90, "CRITICAL"), (70, "HIGH"), (40, "MEDIUM"), (15, "LOW")]
+
+
+def _static_score(report: dict) -> int:
+    """Diem chi tu tin hieu doc MANIFEST."""
     score = 0
     ind = report["indicators"]
     static = report["static"]
-
-    if ind["credential_exfil"]:
-        score += 80
-
     if ind["has_suspicious_host"]:
         score += 25 + min(len(static["suspicious_hosts"]) * 5, 15)
-
     if ind["overprivileged"]:
         score += 20
     score += min(static["dangerous_permission_count"] * 3, 15)
-
     if ind["broad_injection"]:
         score += 15
+    return min(score, 100)
 
+
+def _dynamic_score(report: dict) -> int:
+    """Diem chi tu tin hieu QUAN SAT LUC CHAY."""
+    score = 0
+    ind = report["indicators"]
+    if ind["credential_exfil"]:
+        score += 80
     if ind["causes_page_hang"]:
         score += 10
 
-    # ----- Tin hieu DYNAMIC -----
     dyn = report.get("dynamic", {}).get("undeclared_domains", {})
     sw_hosts = dyn.get("undeclared_from_sw", [])
     page_hosts = dyn.get("undeclared_from_page", [])
@@ -205,16 +215,27 @@ def compute_risk_score(report: dict) -> tuple:
                 else DYNAMIC_WEIGHTS["undeclared_domain_page"])
         extra = (len(sw_hosts) + len(page_hosts) - 1) * DYNAMIC_WEIGHTS["undeclared_per_extra"]
         score += min(base + max(0, extra), DYNAMIC_WEIGHTS["undeclared_cap"])
+    return min(score, 100)
 
-    score = min(score, 100)
 
-    if score >= 70:
-        level = "HIGH"
-    elif score >= 40:
-        level = "MEDIUM"
-    elif score >= 15:
-        level = "LOW"
-    else:
-        level = "MINIMAL"
+def _level_of(score: int) -> str:
+    for threshold, name in LEVEL_THRESHOLDS:
+        if score >= threshold:
+            return name
+    return "MINIMAL"
 
-    return score, level
+
+def compute_risk_score(report: dict) -> tuple:
+    """
+    Tra ve (risk_score, level, breakdown).
+    static va dynamic tinh RIENG (moi cai tu cat tran 100) roi ket hop:
+      risk = max(s, d) + CORROBORATION_COEF * min(s, d)
+    Bao cao GIU CA HAI so rieng => thay duoc dong gop cua dynamic (khong bi tran che).
+    """
+    s = _static_score(report)
+    d = _dynamic_score(report)
+    risk = round(min(max(s, d) + CORROBORATION_COEF * min(s, d), 100))
+    level = _level_of(risk)
+    breakdown = {"static_score": s, "dynamic_score": d,
+                 "corroboration_coef": CORROBORATION_COEF}
+    return risk, level, breakdown

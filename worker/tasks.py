@@ -85,7 +85,8 @@ def analyze_extension(self, job_id: str, crx_sha256: str, crx_s3_key: str, timeo
         job.declared_host_permissions = manifest.get("host_permissions", [])
 
         report = build_behavioral_report(events)
-        risk_score, risk_level = compute_risk_score(report)
+        risk_score, risk_level, score_breakdown = compute_risk_score(report)
+        report["score_breakdown"] = score_breakdown   # luu static/dynamic rieng vao JSONB
         job.risk_score = risk_score
         job.risk_level = risk_level
         job.behavioral_report = report
