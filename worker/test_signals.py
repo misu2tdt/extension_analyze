@@ -5,7 +5,7 @@ Chay: python worker/test_undeclared.py
 """
 from risk import (
     detect_undeclared_domains, detect_unsolicited_tabs, detect_script_injection,
-    build_behavioral_report, compute_risk_score,
+    detect_local_harvest, build_behavioral_report, compute_risk_score,
 )
 
 # events toi gian mo phong canary: SW goi domain la, page goi domain la,
@@ -113,5 +113,32 @@ assert res["has_injection"] is True
 assert res["count"] == 1, f"chi 1 node cross-origin, duoc {res['count']}"
 assert res["injected_nodes"][0]["host"] == "evil-cdn.xyz"
 print("PASS:", res)
+
+print("\n=== TEST LOCAL HARVEST ===")
+ev_harvest = {
+    "manifest": {"name": "h", "host_permissions": [], "permissions": []},
+    "network_requests": [],           # KHONG gui ra network
+    "extension_storage": {
+        "total_bytes": 200,
+        "honeypot_hits": [
+            {"ext_id": "abc", "file": "000003.log",
+             "markers": ["HONEYPOT", "HONEYPOT-PASSWORD"], "snippet": "..."},
+        ],
+    },
+    "honeypot_exfil": False,          # exfil = False (chua gui)
+    "page_hang_count": 0,
+}
+res = detect_local_harvest(ev_harvest)
+assert res["has_harvest"] is True, "phai phat hien harvest trong storage"
+assert "HONEYPOT-PASSWORD" in res["harvested_markers"]
+print("PASS:", res)
+
+# Kiem tra: harvest bat duoc DU exfil=False (storage thay cai network bo sot)
+rep = build_behavioral_report(ev_harvest)
+score, level, bd = compute_risk_score(rep)
+assert rep["indicators"]["local_harvest"] is True
+assert rep["indicators"]["credential_exfil"] is False, "network khong thay gi"
+assert bd["dynamic_score"] >= 30, "harvest phai dong gop diem dynamic"
+print(f"score PASS: dynamic={bd['dynamic_score']} (harvest bat duoc du network im lang)")
 
 print("\nTAT CA PASS")

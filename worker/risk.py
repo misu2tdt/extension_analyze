@@ -37,6 +37,7 @@ DYNAMIC_WEIGHTS = {
     "undeclared_cap": 40,           # tran cho nhom undeclared
     "unsolicited_tab": 15,
     "script_injection": 15,
+    "local_harvest": 30,
 }
 
 
@@ -167,6 +168,23 @@ def detect_script_injection(events: dict) -> dict:
     }
 
 
+def detect_local_harvest(events: dict) -> dict:
+    """
+    TIN HIEU DYNAMIC: honeypot bi cat vao storage cua extension (LevelDB).
+    = "da thu thap du chua kip gui" (MITRE T1074.001 Local Data Staging).
+    Bo tro cho credential_exfil (T1041, da gui ra) - hai giai doan kill-chain khac nhau.
+    Storage doc theo ext_id => khong lan harness, khong can loc.
+    """
+    storage = events.get("extension_storage", {})
+    hits = storage.get("honeypot_hits", [])
+    markers = sorted({m for hit in hits for m in hit.get("markers", [])})
+    return {
+        "harvested_markers": markers,
+        "hit_count": len(hits),
+        "has_harvest": len(hits) > 0,
+    }
+
+
 def build_behavioral_report(events: dict) -> dict:
     manifest = events.get("manifest", {})
     requests = events.get("network_requests", [])
@@ -193,6 +211,7 @@ def build_behavioral_report(events: dict) -> dict:
     undeclared = detect_undeclared_domains(events)
     unsolicited = detect_unsolicited_tabs(events)
     injection = detect_script_injection(events)
+    harvest = detect_local_harvest(events)
 
     return {
         "static": {
@@ -220,6 +239,7 @@ def build_behavioral_report(events: dict) -> dict:
             "undeclared_domains": undeclared,
             "unsolicited_tabs": unsolicited,
             "script_injection": injection,
+            "local_harvest": harvest,
         },
         "indicators": {
             "credential_exfil": events.get("honeypot_exfil", False),
@@ -230,6 +250,7 @@ def build_behavioral_report(events: dict) -> dict:
             "undeclared_domain_contact": undeclared["has_undeclared"],
             "unsolicited_tab": unsolicited["has_unsolicited"],
             "script_injection": injection["has_injection"],
+            "local_harvest": harvest["has_harvest"],
         },
     }
 
@@ -281,6 +302,9 @@ def _dynamic_score(report: dict) -> int:
 
     if ind.get("script_injection"):
         score += DYNAMIC_WEIGHTS["script_injection"]
+
+    if ind.get("local_harvest"):
+        score += DYNAMIC_WEIGHTS["local_harvest"]
 
     return min(score, 100)
 
