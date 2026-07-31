@@ -26,12 +26,16 @@ HARNESS_HOSTS = {
     "localhost", "127.0.0.1", "example.com", "www.example.com",
 }
 
+# Phase ma HARNESS chu dong mo tab => tab o day khong phai extension tu mo.
+HARNESS_PHASES = {"honeypot_pages", "extension_pages"}
+
 # Trong so cham diem dynamic. Gom mot cho de tinh chinh o chuong thuc nghiem.
 DYNAMIC_WEIGHTS = {
     "undeclared_domain_sw": 30,     # SW goi domain la => C2 ngam, nang hon
     "undeclared_domain_page": 15,   # page goi domain la => nhe hon
     "undeclared_per_extra": 5,      # moi domain la them
     "undeclared_cap": 40,           # tran cho nhom undeclared
+    "unsolicited_tab": 15,
 }
 
 
@@ -113,6 +117,27 @@ def detect_undeclared_domains(events: dict) -> dict:
     }
 
 
+def detect_unsolicited_tabs(events: dict) -> dict:
+    """
+    TIN HIEU DYNAMIC: tab do EXTENSION tu mo (khong phai harness).
+    Loc bang PHASE: harness chi mo tab trong honeypot_pages/extension_pages.
+    """
+    ext_tabs = []
+    for tab in events.get("new_tabs", []):
+        phase = tab.get("phase")
+        url = tab.get("url", "")
+        if phase in HARNESS_PHASES:      # tab do harness mo
+            continue
+        if url in ("", "about:blank"):   # tab rong, bo qua (nang cap sau: theo redirect)
+            continue
+        ext_tabs.append({"url": url, "phase": phase})
+    return {
+        "unsolicited_tabs": ext_tabs,
+        "count": len(ext_tabs),
+        "has_unsolicited": len(ext_tabs) > 0,
+    }
+
+
 def build_behavioral_report(events: dict) -> dict:
     manifest = events.get("manifest", {})
     requests = events.get("network_requests", [])
@@ -137,6 +162,7 @@ def build_behavioral_report(events: dict) -> dict:
 
     suspicious_hosts = _extract_suspicious_hosts(manifest)
     undeclared = detect_undeclared_domains(events)
+    unsolicited = detect_unsolicited_tabs(events)
 
     return {
         "static": {
@@ -162,6 +188,7 @@ def build_behavioral_report(events: dict) -> dict:
         },
         "dynamic": {
             "undeclared_domains": undeclared,
+            "unsolicited_tabs": unsolicited,
         },
         "indicators": {
             "credential_exfil": events.get("honeypot_exfil", False),
@@ -170,6 +197,7 @@ def build_behavioral_report(events: dict) -> dict:
             "broad_injection": broad_scope,
             "causes_page_hang": events.get("page_hang_count", 0) > 0,
             "undeclared_domain_contact": undeclared["has_undeclared"],
+            "unsolicited_tab": unsolicited["has_unsolicited"],
         },
     }
 
@@ -215,6 +243,10 @@ def _dynamic_score(report: dict) -> int:
                 else DYNAMIC_WEIGHTS["undeclared_domain_page"])
         extra = (len(sw_hosts) + len(page_hosts) - 1) * DYNAMIC_WEIGHTS["undeclared_per_extra"]
         score += min(base + max(0, extra), DYNAMIC_WEIGHTS["undeclared_cap"])
+
+    if ind.get("unsolicited_tab"):
+        score += DYNAMIC_WEIGHTS["unsolicited_tab"]
+
     return min(score, 100)
 
 

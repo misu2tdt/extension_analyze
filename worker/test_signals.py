@@ -3,7 +3,10 @@ Test tang phan tich TACH KHOI sandbox: khong can Docker/browser,
 chi can du lieu events -> kiem tra dien giai dung.
 Chay: python worker/test_undeclared.py
 """
-from risk import detect_undeclared_domains, build_behavioral_report, compute_risk_score
+from risk import (
+    detect_undeclared_domains, detect_unsolicited_tabs,
+    build_behavioral_report, compute_risk_score,
+)
 
 # events toi gian mo phong canary: SW goi domain la, page goi domain la,
 # khai bao rong, co ca example.com (harness) de kiem tra loc.
@@ -72,5 +75,22 @@ kb3 = {
 r3, l3, b3 = score_of(kb3)
 print(f"KB3 ca hai xau:              risk={r3} ({l3}) | static={b3['static_score']} dynamic={b3['dynamic_score']}")
 assert r3 >= max(b3["static_score"], b3["dynamic_score"]), "corroboration phai >= max"
+
+print("\n=== TEST UNSOLICITED TAB ===")
+ev_tab = {
+    "manifest": {"name": "t", "host_permissions": [], "permissions": []},
+    "network_requests": [],
+    "new_tabs": [
+        {"url": "https://evil.site/pop", "phase": "load"},          # extension mo -> tinh
+        {"url": "about:blank", "phase": "honeypot_pages"},          # harness -> bo
+        {"url": "https://ad.site/x", "phase": "extension_pages"},   # harness phase -> bo
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_unsolicited_tabs(ev_tab)
+assert res["has_unsolicited"] is True
+assert res["count"] == 1, f"chi 1 tab extension, duoc {res['count']}"
+assert res["unsolicited_tabs"][0]["url"] == "https://evil.site/pop"
+print("PASS:", res)
 
 print("\nTAT CA PASS")
