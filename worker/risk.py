@@ -36,6 +36,7 @@ DYNAMIC_WEIGHTS = {
     "undeclared_per_extra": 5,      # moi domain la them
     "undeclared_cap": 40,           # tran cho nhom undeclared
     "unsolicited_tab": 15,
+    "script_injection": 15,
 }
 
 
@@ -138,6 +139,34 @@ def detect_unsolicited_tabs(events: dict) -> dict:
     }
 
 
+def detect_script_injection(events: dict) -> dict:
+    """
+    TIN HIEU DYNAMIC: extension chen SCRIPT/IFRAME co src CROSS-ORIGIN vao trang.
+    Heuristic: node co src tro toi domain KHAC voi trang dang xem => dang ngo.
+    Node inline / same-origin => bo (khong phan biet duoc voi node cua chinh trang).
+    Gioi han: khong bat duoc inline injection (can taint tracking nhu Arcanum).
+    """
+    injected = []
+    for act in events.get("dom_activity", []):
+        if act.get("type") != "node_injected":
+            continue
+        src = act.get("src", "")
+        if not src or src == "(inline)":
+            continue
+        node_host = _host_of(src)
+        if not node_host or node_host in HARNESS_HOSTS:
+            continue
+        page_host = _host_of(act.get("page_url", ""))
+        if node_host == page_host:
+            continue
+        injected.append({"tag": act.get("tag"), "src": src, "host": node_host})
+    return {
+        "injected_nodes": injected,
+        "count": len(injected),
+        "has_injection": len(injected) > 0,
+    }
+
+
 def build_behavioral_report(events: dict) -> dict:
     manifest = events.get("manifest", {})
     requests = events.get("network_requests", [])
@@ -163,6 +192,7 @@ def build_behavioral_report(events: dict) -> dict:
     suspicious_hosts = _extract_suspicious_hosts(manifest)
     undeclared = detect_undeclared_domains(events)
     unsolicited = detect_unsolicited_tabs(events)
+    injection = detect_script_injection(events)
 
     return {
         "static": {
@@ -189,6 +219,7 @@ def build_behavioral_report(events: dict) -> dict:
         "dynamic": {
             "undeclared_domains": undeclared,
             "unsolicited_tabs": unsolicited,
+            "script_injection": injection,
         },
         "indicators": {
             "credential_exfil": events.get("honeypot_exfil", False),
@@ -198,6 +229,7 @@ def build_behavioral_report(events: dict) -> dict:
             "causes_page_hang": events.get("page_hang_count", 0) > 0,
             "undeclared_domain_contact": undeclared["has_undeclared"],
             "unsolicited_tab": unsolicited["has_unsolicited"],
+            "script_injection": injection["has_injection"],
         },
     }
 
@@ -246,6 +278,9 @@ def _dynamic_score(report: dict) -> int:
 
     if ind.get("unsolicited_tab"):
         score += DYNAMIC_WEIGHTS["unsolicited_tab"]
+
+    if ind.get("script_injection"):
+        score += DYNAMIC_WEIGHTS["script_injection"]
 
     return min(score, 100)
 

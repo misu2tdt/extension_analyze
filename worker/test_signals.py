@@ -4,7 +4,7 @@ chi can du lieu events -> kiem tra dien giai dung.
 Chay: python worker/test_undeclared.py
 """
 from risk import (
-    detect_undeclared_domains, detect_unsolicited_tabs,
+    detect_undeclared_domains, detect_unsolicited_tabs, detect_script_injection,
     build_behavioral_report, compute_risk_score,
 )
 
@@ -91,6 +91,27 @@ res = detect_unsolicited_tabs(ev_tab)
 assert res["has_unsolicited"] is True
 assert res["count"] == 1, f"chi 1 tab extension, duoc {res['count']}"
 assert res["unsolicited_tabs"][0]["url"] == "https://evil.site/pop"
+print("PASS:", res)
+
+print("\n=== TEST SCRIPT INJECTION ===")
+ev_inj = {
+    "manifest": {"name": "i", "host_permissions": [], "permissions": []},
+    "network_requests": [],
+    "dom_activity": [
+        {"type": "node_injected", "tag": "SCRIPT",
+         "src": "https://evil-cdn.xyz/x.js", "page_url": "http://localhost:8888/bank.html"},  # cross-origin -> tinh
+        {"type": "node_injected", "tag": "FORM",
+         "src": "http://localhost:8888/bank.html", "page_url": "http://localhost:8888/bank.html"},  # same-origin -> bo
+        {"type": "node_injected", "tag": "SCRIPT",
+         "src": "(inline)", "page_url": "http://localhost:8888/bank.html"},  # inline -> bo
+        {"type": "mutation_summary", "injected_nodes": 5, "page_url": "x"},  # khong phai node_injected -> bo
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_script_injection(ev_inj)
+assert res["has_injection"] is True
+assert res["count"] == 1, f"chi 1 node cross-origin, duoc {res['count']}"
+assert res["injected_nodes"][0]["host"] == "evil-cdn.xyz"
 print("PASS:", res)
 
 print("\nTAT CA PASS")
