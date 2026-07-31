@@ -81,7 +81,10 @@ async def _setup_context_observers(context, events):
     # CAM BIEN 3: tab/popup moi (dau hieu backdoor tu mo URL)
     def on_page(p):
         try:
-            events["new_tabs"].append({"url": p.url})
+            events["new_tabs"].append({
+                "url": p.url,
+                "phase": events.get("_current_phase"),   # THEM: tab mo o phase nao
+            })
             print(f"[Analyze] * New tab opened: {p.url[:100]}", flush=True)
             p.on("framenavigated",
                  lambda f: events["navigations"].append({"url": f.url[:300]}))
