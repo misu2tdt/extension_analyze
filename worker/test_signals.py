@@ -235,4 +235,54 @@ _, _, bd = compute_risk_score(rep)
 assert bd["dynamic_score"] == 8, f"beacon toi host khai bao chi base 8, duoc {bd['dynamic_score']}"
 print(f"score PASS: telemetry host khai bao => dynamic={bd['dynamic_score']} (chi base, khong phat oan)")
 
+print("\n=== TEST FINDINGS (MITRE A2) ===")
+
+# Da tin hieu: credential_exfil(CRIT) + local_harvest(HIGH) + script_injection(HIGH)
+# + unsolicited_tab(LOW,null). Kiem thu tu severity + ma dung + null cho tab.
+ev_rich = {
+    "manifest": {"name": "r", "host_permissions": [], "permissions": []},
+    "network_requests": [],
+    "dom_activity": [
+        {"type": "node_injected", "tag": "SCRIPT",
+         "src": "https://evil-cdn.xyz/x.js", "page_url": "http://localhost:8888/bank.html"},
+    ],
+    "extension_storage": {
+        "total_bytes": 100,
+        "honeypot_hits": [{"ext_id": "a", "file": "f",
+                           "markers": ["HONEYPOT-PASSWORD"], "snippet": "x"}],
+    },
+    "new_tabs": [{"url": "https://ad.evil/pop", "phase": "load"}],
+    "honeypot_exfil": True,
+    "page_hang_count": 0,
+}
+rep = build_behavioral_report(ev_rich)
+f = rep["findings"]
+ids = [x["technique_id"] for x in f]
+assert len(f) == 4, f"4 finding, duoc {len(f)}"
+assert ids == ["T1041", "T1074.001", "T1059.007", None], f"sai thu tu/ma: {ids}"
+assert f[0]["severity"] == "CRITICAL" and f[0]["tactic"] == "Exfiltration"
+assert f[-1]["signal"] == "unsolicited_tab" and f[-1]["technique_id"] is None
+assert "note" in f[-1], "tab abuse phai ghi chu khoang trong ATT&CK"
+# findings ADDITIVE: khong doi score. dynamic=80+30+15+15=140 -> cap 100.
+_, _, bd = compute_risk_score(rep)
+assert bd["dynamic_score"] == 100, f"score tu tin hieu (khong tu findings): {bd['dynamic_score']}"
+print("PASS rich findings:", [(x["signal"], x["technique_id"], x["severity"]) for x in f])
+
+# Beacon undeclared => 2 finding cung MEDIUM: beaconing + undeclared_domain_contact.
+rep_b = build_behavioral_report(ev_beacon)
+bids = sorted(x["technique_id"] for x in rep_b["findings"])
+assert bids == ["T1071", "T1071.001"], f"beacon findings sai: {bids}"
+print("PASS beacon findings:", bids)
+
+# Heuristic TINH (overprivileged...) KHONG sinh finding MITRE.
+ev_static = {
+    "manifest": {"name": "s", "host_permissions": ["<all_urls>"],
+                 "permissions": ["tabs", "webRequest", "cookies", "scripting"]},
+    "network_requests": [], "honeypot_exfil": False, "page_hang_count": 0,
+}
+rep_s = build_behavioral_report(ev_static)
+assert rep_s["indicators"]["overprivileged"] is True, "van la overprivileged"
+assert rep_s["findings"] == [], "heuristic tinh KHONG map MITRE"
+print("PASS static-only => 0 findings (overprivileged khong phai technique)")
+
 print("\nTAT CA PASS")

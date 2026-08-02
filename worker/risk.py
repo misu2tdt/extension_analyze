@@ -262,6 +262,59 @@ def detect_beaconing(events: dict) -> dict:
     }
 
 
+# ---- A2: MITRE ATT&CK mapping ----
+# Dan nhan CHUAN NGANH len tin hieu OBSERVED. Chi map technique QUAN SAT DUOC luc chay;
+# cac heuristic tinh (overprivileged, has_suspicious_host, broad_injection,
+# causes_page_hang) CO Y khong co o day - chung la thuoc tinh rui ro, khong phai
+# technique doi thu => khong fit ep.
+# severity = muc nghiem trong VON CO cua technique neu confirmed; truc KHAC voi weight
+# trong scoring (weight co tinh FP). Hai truc doc lap, co tai lieu hoa.
+SIGNAL_MITRE = {
+    "credential_exfil": {
+        "technique_id": "T1041",
+        "technique_name": "Exfiltration Over C2 Channel",
+        "tactic": "Exfiltration", "severity": "CRITICAL", "layer": "dynamic"},
+    "local_harvest": {
+        "technique_id": "T1074.001",
+        "technique_name": "Local Data Staging",
+        "tactic": "Collection", "severity": "HIGH", "layer": "dynamic"},
+    "script_injection": {
+        "technique_id": "T1059.007",
+        "technique_name": "Command and Scripting Interpreter: JavaScript",
+        "tactic": "Execution", "severity": "HIGH", "layer": "dynamic"},
+    "beaconing": {
+        "technique_id": "T1071.001",
+        "technique_name": "Application Layer Protocol: Web Protocols",
+        "tactic": "Command and Control", "severity": "MEDIUM", "layer": "dynamic"},
+    "undeclared_domain_contact": {
+        "technique_id": "T1071",
+        "technique_name": "Application Layer Protocol",
+        "tactic": "Command and Control", "severity": "MEDIUM", "layer": "dynamic"},
+    # Thanh that KHONG map: ATT&CK Enterprise khong co technique khop cho browser
+    # tab abuse (ad/redirect). Van emit finding de report BE LO khoang trong nay
+    # (mot luan diem thesis) thay vi giau di hoac ep sang ma gan-gan.
+    "unsolicited_tab": {
+        "technique_id": None,
+        "technique_name": None,
+        "tactic": "Impact", "severity": "LOW", "layer": "dynamic",
+        "note": "Browser tab abuse chua co technique khop trong ATT&CK Enterprise"},
+}
+
+_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+
+def build_findings(report: dict) -> list:
+    """
+    Dan nhan MITRE len cac tin hieu OBSERVED dang bat. ADDITIVE - KHONG feed score.
+    Chi emit cho indicator co trong SIGNAL_MITRE. Sap xep severity giam dan.
+    """
+    ind = report.get("indicators", {})
+    findings = [{"signal": sig, **meta}
+                for sig, meta in SIGNAL_MITRE.items() if ind.get(sig)]
+    findings.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 9))
+    return findings
+
+
 def build_behavioral_report(events: dict) -> dict:
     manifest = events.get("manifest", {})
     requests = events.get("network_requests", [])
@@ -291,7 +344,7 @@ def build_behavioral_report(events: dict) -> dict:
     harvest = detect_local_harvest(events)
     beaconing = detect_beaconing(events)
 
-    return {
+    report = {
         "static": {
             "manifest_version": manifest.get("manifest_version"),
             "declared_permissions": sorted(perms),
@@ -333,6 +386,8 @@ def build_behavioral_report(events: dict) -> dict:
             "beaconing": beaconing["has_beaconing"],
         },
     }
+    report["findings"] = build_findings(report)
+    return report
 
 
 # Trong so corroboration khi ket hop static & dynamic.
