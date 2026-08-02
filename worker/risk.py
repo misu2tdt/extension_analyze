@@ -3,6 +3,7 @@ Risk scoring + behavioral report builder.
 Signal thiet ke dua tren hanh vi THAT tu 4 malware sample (chien dich 108-extension):
   - Overprivilege, suspicious host, broad content-script scope, page hang, honeypot exfil
 """
+import statistics
 from urllib.parse import urlparse
 
 DANGEROUS_PERMISSIONS = {
@@ -38,7 +39,19 @@ DYNAMIC_WEIGHTS = {
     "unsolicited_tab": 15,
     "script_injection": 15,
     "local_harvest": 30,
+    # Beaconing: nhip deu tu than YEU (telemetry lanh tinh cung beacon: GA/Sentry).
+    # Chi leo thang khi beacon toi host KHONG khai bao => cung co gia thuyet C2.
+    # Bang chung field: Palo Alto DeepSeek case - C2 la mot host RIENG, khong khai bao.
+    "beaconing_base": 8,               # co nhip, toi host bat ky
+    "beaconing_undeclared_bonus": 12,  # nhip toi host la => tong 20, duoi undeclared_sw(30)
 }
+
+# Nguong beaconing. Don vi phan tich la INTERVAL (khoang cach 2 request lien tiep
+# cung host), khong phai request => k request cho k-1 interval.
+MIN_BEACON_REQUESTS = 4     # >=3 interval moi noi duoc ve do deu; san than trong
+BEACON_CV_MAX = 0.25        # coefficient of variation toi da; tunable [0.15-0.35],
+                            # KHONG claim toi uu. C2 that jitter ~10-20% => cv ~0.06-0.12.
+MIN_PERIOD_S = 0.5          # mean interval duoi nguong nay = tight loop, khong phai beacon
 
 
 def _host_of(url: str) -> str:
@@ -185,6 +198,70 @@ def detect_local_harvest(events: dict) -> dict:
     }
 
 
+def detect_beaconing(events: dict) -> dict:
+    """
+    TIN HIEU DYNAMIC: nhip request DEU DAN toi cung mot host (C2 beaconing).
+    Khac 5 tin hieu kia o CHAT: day la temporal pattern, phai do bang metric
+    (coefficient of variation) chu khong boolean/count don thuan.
+
+    Do do: gom request CO timestamp 't' theo HOST (khong theo path - exfil hay ma
+    hoa data vao path nen path bien thien, host on dinh). Tinh interval giua cac
+    request lien tiep => cv = pstdev/mean. Beacon neu cv <= BEACON_CV_MAX.
+
+    Dung 't' TUONG DOI (hieu giua 2 request) => mien nhiem voi warm-up jitter va
+    do KHONG neo vao _t0. Nhom PAGE + SW (SW la noi C2 hay xay ra nhat).
+
+    Cross-ref undeclared: gan host_undeclared cho moi beacon. Trong so leo thang
+    theo co qua _dynamic_score, KHONG double-count o day.
+    spans_phases: tinh & report (nen cho Ex-Ray L0 sau), chua dua vao trong so.
+    """
+    undeclared_hosts = set(detect_undeclared_domains(events)["undeclared_total"])
+
+    by_host = {}
+    for r in events.get("network_requests", []):
+        t = r.get("t")
+        host = r.get("host") or _host_of(r.get("url", ""))
+        if t is None or not host or host in HARNESS_HOSTS:
+            continue
+        by_host.setdefault(host, []).append(
+            {"t": t, "phase": r.get("phase"), "origin": r.get("origin")})
+
+    beacons = []
+    for host, reqs in by_host.items():
+        if len(reqs) < MIN_BEACON_REQUESTS:      # chua du mau => khong phan quyet
+            continue
+        ts = sorted(x["t"] for x in reqs)
+        intervals = [round(ts[i + 1] - ts[i], 3) for i in range(len(ts) - 1)]
+        mean = statistics.fmean(intervals)
+        if mean < MIN_PERIOD_S:                  # tight loop, khong phai beacon
+            continue
+        cv = round(statistics.pstdev(intervals) / mean, 3) if mean > 0 else 0.0
+        if cv > BEACON_CV_MAX:                    # khong du deu
+            continue
+        phases = sorted({x["phase"] for x in reqs if x["phase"]})
+        origins = sorted({x["origin"] for x in reqs if x["origin"]})
+        beacons.append({
+            "host": host,
+            "count": len(reqs),
+            "interval_mean_s": round(mean, 3),
+            "cv": cv,
+            "jitter_pct": round(cv * 100, 1),
+            "host_undeclared": host in undeclared_hosts,
+            "spans_phases": len(phases),
+            "phases": phases,
+            "origins": origins,
+        })
+
+    # undeclared beacon len dau (dang ngo nhat), roi den do deu tang dan.
+    beacons.sort(key=lambda b: (not b["host_undeclared"], b["cv"]))
+    return {
+        "beacons": beacons,
+        "count": len(beacons),
+        "has_beaconing": len(beacons) > 0,
+        "has_undeclared_beacon": any(b["host_undeclared"] for b in beacons),
+    }
+
+
 def build_behavioral_report(events: dict) -> dict:
     manifest = events.get("manifest", {})
     requests = events.get("network_requests", [])
@@ -212,6 +289,7 @@ def build_behavioral_report(events: dict) -> dict:
     unsolicited = detect_unsolicited_tabs(events)
     injection = detect_script_injection(events)
     harvest = detect_local_harvest(events)
+    beaconing = detect_beaconing(events)
 
     return {
         "static": {
@@ -240,6 +318,7 @@ def build_behavioral_report(events: dict) -> dict:
             "unsolicited_tabs": unsolicited,
             "script_injection": injection,
             "local_harvest": harvest,
+            "beaconing": beaconing,
         },
         "indicators": {
             "credential_exfil": events.get("honeypot_exfil", False),
@@ -251,6 +330,7 @@ def build_behavioral_report(events: dict) -> dict:
             "unsolicited_tab": unsolicited["has_unsolicited"],
             "script_injection": injection["has_injection"],
             "local_harvest": harvest["has_harvest"],
+            "beaconing": beaconing["has_beaconing"],
         },
     }
 
@@ -305,6 +385,15 @@ def _dynamic_score(report: dict) -> int:
 
     if ind.get("local_harvest"):
         score += DYNAMIC_WEIGHTS["local_harvest"]
+
+    # Beaconing: base yeu; leo thang khi nhip toi host KHONG khai bao (nghi C2).
+    # Phan "host la" da duoc undeclared_domain cham rieng => o day chi cham phan NHIP.
+    beac = report.get("dynamic", {}).get("beaconing", {})
+    if beac.get("has_beaconing"):
+        b = DYNAMIC_WEIGHTS["beaconing_base"]
+        if beac.get("has_undeclared_beacon"):
+            b += DYNAMIC_WEIGHTS["beaconing_undeclared_bonus"]
+        score += b
 
     return min(score, 100)
 

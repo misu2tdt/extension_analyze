@@ -5,7 +5,7 @@ Chay: python worker/test_undeclared.py
 """
 from risk import (
     detect_undeclared_domains, detect_unsolicited_tabs, detect_script_injection,
-    detect_local_harvest, build_behavioral_report, compute_risk_score,
+    detect_local_harvest, detect_beaconing, build_behavioral_report, compute_risk_score,
 )
 
 # events toi gian mo phong canary: SW goi domain la, page goi domain la,
@@ -140,5 +140,99 @@ assert rep["indicators"]["local_harvest"] is True
 assert rep["indicators"]["credential_exfil"] is False, "network khong thay gi"
 assert bd["dynamic_score"] >= 30, "harvest phai dong gop diem dynamic"
 print(f"score PASS: dynamic={bd['dynamic_score']} (harvest bat duoc du network im lang)")
+
+print("\n=== TEST BEACONING ===")
+
+def _req(url, t, phase="honeypot_pages", origin="service_worker"):
+    return {"url": url, "host": url.split("/")[2], "t": t, "phase": phase, "origin": origin}
+
+# (1) DUONG: SW beacon deu tuyet doi toi host KHONG khai bao => C2.
+ev_beacon = {
+    "manifest": {"name": "b", "host_permissions": [], "permissions": []},
+    "network_requests": [
+        _req("https://beacon-c2.invalid/p", 1.0, "honeypot_pages"),
+        _req("https://beacon-c2.invalid/p", 3.0, "honeypot_pages"),
+        _req("https://beacon-c2.invalid/p", 5.0, "target_matched"),
+        _req("https://beacon-c2.invalid/p", 7.0, "extension_pages"),
+        _req("https://beacon-c2.invalid/p", 9.0, "delayed_observation"),
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_beaconing(ev_beacon)
+assert res["has_beaconing"] is True
+assert res["count"] == 1, f"chi 1 beacon, duoc {res['count']}"
+b0 = res["beacons"][0]
+assert b0["host"] == "beacon-c2.invalid"
+assert b0["count"] == 5, f"5 request, duoc {b0['count']}"
+assert b0["cv"] == 0.0, f"deu tuyet doi cv phai 0.0, duoc {b0['cv']}"
+assert b0["interval_mean_s"] == 2.0
+assert b0["host_undeclared"] is True, "host la phai bi danh dau undeclared"
+assert b0["spans_phases"] == 4, f"trai 4 phase, duoc {b0['spans_phases']}"
+assert res["has_undeclared_beacon"] is True
+print("PASS undeclared beacon:", b0)
+
+rep = build_behavioral_report(ev_beacon)
+_, _, bd = compute_risk_score(rep)
+assert rep["indicators"]["beaconing"] is True
+assert bd["dynamic_score"] == 50, f"undeclared_sw(30)+beacon(20)=50, duoc {bd['dynamic_score']}"
+print(f"score PASS: dynamic={bd['dynamic_score']} (undeclared_sw 30 + beacon 20)")
+
+# (2) AM - jitter: interval khong deu => cv > nguong => KHONG phai beacon.
+ev_jitter = {
+    "manifest": {"name": "j", "host_permissions": [], "permissions": []},
+    "network_requests": [
+        _req("https://jitter.invalid/x", 1.0),
+        _req("https://jitter.invalid/x", 1.5),
+        _req("https://jitter.invalid/x", 4.0),
+        _req("https://jitter.invalid/x", 4.2),
+        _req("https://jitter.invalid/x", 9.0),
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+assert detect_beaconing(ev_jitter)["has_beaconing"] is False, "traffic khong deu khong duoc tinh beacon"
+print("PASS jitter -> khong beacon")
+
+# (3) AM - it mau: 3 request (<MIN_BEACON_REQUESTS) => khong phan quyet.
+ev_sparse = {
+    "manifest": {"name": "s", "host_permissions": [], "permissions": []},
+    "network_requests": [
+        _req("https://sparse.invalid/x", 2.0),
+        _req("https://sparse.invalid/x", 4.0),
+        _req("https://sparse.invalid/x", 6.0),
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+assert detect_beaconing(ev_sparse)["has_beaconing"] is False, "3 request thi chua ket luan"
+print("PASS sparse -> insufficient samples")
+
+# (4) AM - tight loop: interval 0.1s < MIN_PERIOD_S du cv=0 => khong phai beacon.
+ev_loop = {
+    "manifest": {"name": "l", "host_permissions": [], "permissions": []},
+    "network_requests": [_req("https://loop.invalid/x", 1.0 + i * 0.1) for i in range(5)],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+assert detect_beaconing(ev_loop)["has_beaconing"] is False, "tight loop khong phai beacon"
+print("PASS tight loop -> khong beacon")
+
+# (5) AM ve DE DOA - beacon toi host DA KHAI BAO (telemetry lanh tinh): chi base(8).
+ev_telemetry = {
+    "manifest": {"name": "t", "host_permissions": ["https://api.myext.io/*"], "permissions": []},
+    "network_requests": [
+        _req("https://api.myext.io/ping", 1.0),
+        _req("https://api.myext.io/ping", 3.0),
+        _req("https://api.myext.io/ping", 5.0),
+        _req("https://api.myext.io/ping", 7.0),
+        _req("https://api.myext.io/ping", 9.0),
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_beaconing(ev_telemetry)
+assert res["has_beaconing"] is True, "van phat hien nhip"
+assert res["has_undeclared_beacon"] is False, "host da khai bao => khong phai C2"
+assert res["beacons"][0]["host_undeclared"] is False
+rep = build_behavioral_report(ev_telemetry)
+_, _, bd = compute_risk_score(rep)
+assert bd["dynamic_score"] == 8, f"beacon toi host khai bao chi base 8, duoc {bd['dynamic_score']}"
+print(f"score PASS: telemetry host khai bao => dynamic={bd['dynamic_score']} (chi base, khong phat oan)")
 
 print("\nTAT CA PASS")
