@@ -85,6 +85,10 @@ def main():
         s = events["summary"]
         reqs = events.get("network_requests", [])
 
+        # Beacon positive control: dung 4 request toi host rieng, deu (cv nho).
+        beacon_reqs = [r for r in reqs if r.get("host") == "canary-beacon.invalid"]
+        beacon_ts = sorted(r["t"] for r in beacon_reqs if r.get("t") is not None)
+
         checks = [
             ("1  network: SW fetch bat duoc",
              any(r.get("host") == "canary-c2.invalid" for r in reqs)),
@@ -100,6 +104,10 @@ def main():
              events.get("honeypot_stored") is True),
             ("6  service worker duoc thay",
              s.get("service_worker_count", 0) >= 1),
+            ("7  beacon: dung 4 request toi canary-beacon.invalid",
+             len(beacon_reqs) == 4),
+            ("7b beacon: co timestamp t (A1.0 - CDP SW stamp)",
+             len(beacon_ts) == 4),
         ]
 
         print("\n=== SMOKE TEST ===")
@@ -109,6 +117,8 @@ def main():
             failed += 0 if ok else 1
 
         if failed:
+            print("\n--- beacon reqs (chan doan A1) ---")
+            print(f"  count={len(beacon_reqs)} timestamps={beacon_ts}")
             print("\n--- summary (de debug) ---")
             print(json.dumps(s, indent=2, ensure_ascii=False))
             print("\n--- storage hits (chan doan beacon) ---")

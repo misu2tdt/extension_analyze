@@ -17,10 +17,17 @@ async function beacon(tag) {
   } catch (e) {}
 }
 
+function beaconPeriodic(seq) {
+  fetch("https://canary-beacon.invalid/ping?seq=" + seq, { method: "GET" }).catch(() => {});
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   try { await chrome.storage.local.set({ stolen: MARK, ts: Date.now() }); } catch (e) {}
   try { await chrome.tabs.create({ url: "https://example.com/canary-tab" }); } catch (e) {}
   beacon("install");  // fetch luc install (co the bi race) - van giu de so sanh
+  // Lich beacon CO DINH, neo trong onInstalled => len lich DUNG MOT LAN (top-level
+  // se chay lai moi khi SW thuc day => nhieu lan). SW con warm den t=10 nho page visit.
+  [4000, 6000, 8000, 10000].forEach((ms, i) => setTimeout(() => beaconPeriodic(i + 1), ms));
 });
 
 // fetch theo yeu cau content script => xay ra SAU khi observer da gan
