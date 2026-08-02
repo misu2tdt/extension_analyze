@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import urllib.request
 import websockets
 
@@ -22,6 +23,11 @@ def _record_cdp_request(rq, events):
         "host": _host_of(url),
     }
     entry["phase"] = events.get("_current_phase")
+    # Dong dau timestamp tuong doi giong network.py => beaconing tinh duoc interval
+    # tren network SW (noi C2 hay xay ra). Latency websocket la HANG SO => triet tieu
+    # khi lay hieu giua 2 request; chi variance moi anh huong, ma no ~vai ms << interval.
+    if events.get("_t0") is not None:
+        entry["t"] = round(time.monotonic() - events["_t0"], 3)
     if body:
         entry["post_data"] = body[:MAX_BODY_LEN]
         entry["post_data_len"] = len(body)
