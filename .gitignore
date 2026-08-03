@@ -42,3 +42,6 @@ smoke_out/
 smoke_out_timeout/
 # Zip khong track (src.zip, worker.zip)
 *.zip
+
+# Eval results (nang, khong track)
+eval/results/
