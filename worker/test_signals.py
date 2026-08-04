@@ -285,4 +285,27 @@ assert rep_s["indicators"]["overprivileged"] is True, "van la overprivileged"
 assert rep_s["findings"] == [], "heuristic tinh KHONG map MITRE"
 print("PASS static-only => 0 findings (overprivileged khong phai technique)")
 
+print("\n=== TEST UNDECLARED DOMAIN FILTERING (fix nhieu) ===")
+ev_filter = {
+    "manifest": {"name": "f", "host_permissions": [], "permissions": []},
+    "network_requests": [
+        {"url": "chrome-extension://ddbnhhjangoagiipejagamkakncbpipp/sw.js",
+         "host": "ddbnhhjangoagiipejagamkakncbpipp", "origin": "service_worker"},
+        {"url": "https://ddbnhhjangoagiipejagamkakncbpipp/x",
+         "host": "ddbnhhjangoagiipejagamkakncbpipp", "origin": "service_worker"},
+        {"url": "https://fonts.googleapis.com/css", "host": "fonts.googleapis.com", "origin": "page"},
+        {"url": "https://challenges.cloudflare.com/turnstile", "host": "challenges.cloudflare.com", "origin": "page"},
+        {"url": "https://mc.yandex.ru/watch", "host": "mc.yandex.ru", "origin": "page"},
+        {"url": "https://cloudapi.stream/gate", "host": "cloudapi.stream", "origin": "service_worker"},
+        {"url": "https://julia-info.kiev.ua/c", "host": "julia-info.kiev.ua", "origin": "page"},
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_undeclared_domains(ev_filter)
+assert res["undeclared_total"] == ["cloudapi.stream", "julia-info.kiev.ua"], \
+    f"chi 2 domain that duoc tinh, duoc {res['undeclared_total']}"
+assert "ddbnhhjangoagiipejagamkakncbpipp" not in res["undeclared_total"], "extension-id phai bi loai"
+assert "fonts.googleapis.com" not in res["undeclared_total"], "ha tang lanh phai bi loai"
+print("PASS loc undeclared:", res["undeclared_total"])
+
 print("\nTAT CA PASS")

@@ -16,8 +16,22 @@ DANGEROUS_PERMISSIONS = {
 BROAD_MATCH_PATTERNS = {"<all_urls>", "http://*/*", "https://*/*", "*://*/*"}
 
 KNOWN_INFRA_HOSTS = {
-    "clients2.google.com", "www.google.com", "google.com",
+    # Google infra / analytics / ads / fonts
+    "clients2.google.com", "www.google.com", "google.com", "accounts.google.com",
+    "apis.google.com", "gstatic.com", "fonts.googleapis.com", "fonts.gstatic.com",
+    "googleapis.com", "googletagmanager.com", "google-analytics.com",
+    "analytics.google.com", "doubleclick.net", "googleadservices.com",
+    "googlesyndication.com", "gvt1.com", "gvt2.com",
+    # CDN / thu vien tinh (chi subdomain lanh, KHONG whitelist cloud chung chung)
+    "jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com", "fontawesome.com",
+    "challenges.cloudflare.com", "cloudflareinsights.com",
+    # Social pixel / analytics / error-reporting (dual-use nhe, nhung khong phan biet duoc)
+    "connect.facebook.net", "www.facebook.com", "facebook.com", "fbcdn.net",
+    "sentry.io", "bat.bing.com", "c.bing.com", "bing.com", "mc.yandex.ru",
+    # Harness / local
     "example.com", "localhost", "127.0.0.1",
+    # LUU Y: KHONG whitelist amazonaws (S3 hay bi dung exfil) hay cloudflare-workers
+    # (hay bi dung C2). Chi liet ke subdomain chac chan lanh.
 }
 
 # ==================== TIN HIEU DYNAMIC ====================
@@ -59,6 +73,16 @@ def _host_of(url: str) -> str:
         return (urlparse(url).hostname or "").lower()
     except Exception:
         return ""
+
+
+# Scheme noi bo / khong phai lien lac mang ra ngoai => bo qua khi tinh domain.
+_INTERNAL_SCHEMES = ("chrome-extension://", "chrome://", "moz-extension://",
+                     "edge://", "about:", "data:", "blob:", "filesystem:")
+
+
+def _is_real_domain(host: str) -> bool:
+    """Domain thuc su ra ngoai: co dau '.' (loai extension-id 32 ky tu, localhost-like)."""
+    return bool(host) and "." in host
 
 
 def _extract_suspicious_hosts(manifest: dict) -> list:
@@ -114,8 +138,11 @@ def detect_undeclared_domains(events: dict) -> dict:
 
     from_sw, from_page = set(), set()
     for r in events.get("network_requests", []):
-        host = _host_of(r.get("url", ""))
-        if not host or host in HARNESS_HOSTS or host in declared:
+        url = r.get("url", "")
+        if url.startswith(_INTERNAL_SCHEMES):      # Fix A: bo request noi bo extension
+            continue
+        host = _host_of(url)
+        if not _is_real_domain(host) or host in HARNESS_HOSTS or host in declared:
             continue
         if any(known in host for known in KNOWN_INFRA_HOSTS):
             continue
@@ -219,9 +246,12 @@ def detect_beaconing(events: dict) -> dict:
 
     by_host = {}
     for r in events.get("network_requests", []):
+        url = r.get("url", "")
+        if url.startswith(_INTERNAL_SCHEMES):
+            continue
         t = r.get("t")
-        host = r.get("host") or _host_of(r.get("url", ""))
-        if t is None or not host or host in HARNESS_HOSTS:
+        host = r.get("host") or _host_of(url)
+        if t is None or not _is_real_domain(host) or host in HARNESS_HOSTS:
             continue
         by_host.setdefault(host, []).append(
             {"t": t, "phase": r.get("phase"), "origin": r.get("origin")})
