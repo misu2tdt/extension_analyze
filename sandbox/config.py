@@ -6,6 +6,7 @@ DWELL_MS = 3000                  # thoi gian o lai moi trang cho extension hanh 
 PROFILE_DIR = "/tmp/chrome-profile"
 REMOTE_DEBUG_PORT = 9222         # cho CDP session bat network service worker MV3
 MAX_BODY_LEN = 2000
+MAX_TARGET_HOSTS = 2
 
 # Cac phase cua mot luot phan tich, theo dung thu tu.
 PHASE_NAMES = ["load", "honeypot_pages", "target_matched",

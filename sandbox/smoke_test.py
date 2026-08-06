@@ -89,6 +89,9 @@ def main():
         beacon_reqs = [r for r in reqs if r.get("host") == "canary-beacon.invalid"]
         beacon_ts = sorted(r["t"] for r in beacon_reqs if r.get("t") is not None)
 
+        tm_hosts = events.get("target_matched_hosts", [])
+        tm_hit = any(r.get("host") == "canary-target-hit.invalid" for r in reqs)
+
         checks = [
             ("1  network: SW fetch bat duoc",
              any(r.get("host") == "canary-c2.invalid" for r in reqs)),
@@ -108,6 +111,10 @@ def main():
              len(beacon_reqs) == 4),
             ("7b beacon: co timestamp t (A1.0 - CDP SW stamp)",
              len(beacon_ts) == 4),
+            ("8  target_matched doc dung host tu manifest",
+             "canary-target.invalid" in tm_hosts),
+            ("8b target_matched spoof => content script tiem (beacon canary-target-hit)",
+             tm_hit),
         ]
 
         print("\n=== SMOKE TEST ===")
@@ -119,6 +126,9 @@ def main():
         if failed:
             print("\n--- beacon reqs (chan doan A1) ---")
             print(f"  count={len(beacon_reqs)} timestamps={beacon_ts}")
+            print("\n--- target_matched (chan doan B3) ---")
+            print(f"  hosts={tm_hosts} hit={tm_hit}")
+            print(f"  visited={events.get('target_matched_visited')} note={events.get('target_matched_note')}")
             print("\n--- summary (de debug) ---")
             print(json.dumps(s, indent=2, ensure_ascii=False))
             print("\n--- storage hits (chan doan beacon) ---")
