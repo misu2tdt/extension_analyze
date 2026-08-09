@@ -51,8 +51,10 @@ kb1 = {
     "network_requests": [], "honeypot_exfil": False, "page_hang_count": 0,
 }
 r1, l1, b1 = score_of(kb1)
-print(f"KB1 manifest xau, runtime im: risk={r1} ({l1}) | static={b1['static_score']} dynamic={b1['dynamic_score']}")
+print(f"KB1 manifest xau, runtime im: risk={r1} ({l1}) | static={b1['static_score']} dynamic={b1['dynamic_score']} eff={b1['static_effective']}")
 assert b1["static_score"] > 0 and b1["dynamic_score"] == 0
+assert r1 <= 35 and l1 in ("LOW", "MINIMAL"), \
+    f"static MOT MINH (dynamic im) khong duoc flag MEDIUM+, duoc risk={r1} ({l1})"
 
 # KB2: manifest SACH, runtime goi C2 tu SW => static ~0, dynamic cao  <-- DYNAMIC TOA SANG
 kb2 = {

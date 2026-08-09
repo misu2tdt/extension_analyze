@@ -425,6 +425,14 @@ def build_behavioral_report(events: dict) -> dict:
 # nhung < 0.5 nen khong lan at truc chinh. Tham so tunable, kiem o chuong thuc nghiem.
 CORROBORATION_COEF = 0.3
 
+# Static la PRIOR yeu: capability (quyen rong) KHAC hanh vi doc hai. Cong cu lanh
+# (password manager, ad blocker) cung xin quyen rong => static MOT MINH khong duoc
+# tu day len MEDIUM+. Chi khi dynamic corroborate (quan sat duoc hanh vi thuc) static
+# moi phat huy day du. Phat hien tu FP benign: Privacy Badger/Vimium/SingleFile co
+# static cao nhung dynamic=0 => bi flag oan chi vi xin quyen rong.
+STATIC_ALONE_CAP = 35       # tran cho static khi dynamic im (giu o muc LOW, khong flag)
+DYNAMIC_PRESENT_MIN = 15    # nguong coi dynamic "co hanh vi quan sat duoc"
+
 # Nguong muc do, neo theo dai CVSS v3 (x10 sang thang 100).
 LEVEL_THRESHOLDS = [(90, "CRITICAL"), (70, "HIGH"), (40, "MEDIUM"), (15, "LOW")]
 
@@ -499,8 +507,11 @@ def compute_risk_score(report: dict) -> tuple:
     """
     s = _static_score(report)
     d = _dynamic_score(report)
-    risk = round(min(max(s, d) + CORROBORATION_COEF * min(s, d), 100))
+    # Khi dynamic im (khong quan sat duoc hanh vi), chan static khong tu day len MEDIUM+.
+    # Khi co dynamic corroborate, static phat huy day du.
+    s_eff = min(s, STATIC_ALONE_CAP) if d < DYNAMIC_PRESENT_MIN else s
+    risk = round(min(max(s_eff, d) + CORROBORATION_COEF * min(s_eff, d), 100))
     level = _level_of(risk)
-    breakdown = {"static_score": s, "dynamic_score": d,
-                 "corroboration_coef": CORROBORATION_COEF}
+    breakdown = {"static_score": s, "static_effective": s_eff,
+                 "dynamic_score": d, "corroboration_coef": CORROBORATION_COEF}
     return risk, level, breakdown
