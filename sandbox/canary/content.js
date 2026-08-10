@@ -13,3 +13,6 @@ try {
   // Yeu cau service worker beacon NGAY BAY GIO (observer da gan tu lau).
   chrome.runtime.sendMessage({ cmd: "beacon" });
 } catch (e) {}
+
+// GD1 provenance validate: content script (isolated world) => phai duoc gan ext_initiated=True
+fetch("https://canary-cs.invalid/probe").catch(() => {});

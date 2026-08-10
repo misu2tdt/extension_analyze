@@ -92,6 +92,8 @@ def main():
         tm_hosts = events.get("target_matched_hosts", [])
         tm_hit = any(r.get("host") == "canary-target-hit.invalid" for r in reqs)
 
+        prov = events.get("request_provenance", {})
+
         checks = [
             ("1  network: SW fetch bat duoc",
              any(r.get("host") == "canary-c2.invalid" for r in reqs)),
@@ -115,6 +117,10 @@ def main():
              "canary-target.invalid" in tm_hosts),
             ("8b target_matched spoof => content script tiem (beacon canary-target-hit)",
              tm_hit),
+            ("9  provenance: content-script request => ext_initiated=True",
+             prov.get("canary-cs.invalid") is True),
+            ("9b provenance: page inline-script request => ext_initiated=False",
+             prov.get("canary-page.invalid") is False),
         ]
 
         print("\n=== SMOKE TEST ===")
@@ -129,6 +135,8 @@ def main():
             print("\n--- target_matched (chan doan B3) ---")
             print(f"  hosts={tm_hosts} hit={tm_hit}")
             print(f"  visited={events.get('target_matched_visited')} note={events.get('target_matched_note')}")
+            print("\n--- request_provenance (chan doan GD1) ---")
+            print(json.dumps(prov, indent=2, ensure_ascii=False))
             print("\n--- summary (de debug) ---")
             print(json.dumps(s, indent=2, ensure_ascii=False))
             print("\n--- storage hits (chan doan beacon) ---")

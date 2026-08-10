@@ -9,6 +9,24 @@ from honeypot import _find_honeypot
 from utils import _host_of
 
 
+def _initiator_is_extension(initiator: dict) -> bool:
+    """True neu request do code EXTENSION khoi tao (initiator stack co chrome-extension://).
+    Isolated world dam bao content script de lai URL chrome-extension:// trong stack."""
+    urls = []
+    if initiator.get("url"):
+        urls.append(initiator["url"])
+    stack = initiator.get("stack")
+    hops = 0
+    while stack and hops < 50:
+        for cf in stack.get("callFrames", []):
+            u = cf.get("url", "")
+            if u:
+                urls.append(u)
+            hops += 1
+        stack = stack.get("parent")
+    return any(u.startswith("chrome-extension://") for u in urls)
+
+
 # ============ CAM BIEN 1b: NETWORK SERVICE WORKER QUA CDP ============
 # context.on("request") cua Playwright MU voi network cua SW MV3 (da kiem chung
 # bang canary). CDP o cap browser + auto-attach flatten moi bat duoc.
@@ -101,9 +119,22 @@ async def _cdp_sw_sensor(events, stop_evt, port=REMOTE_DEBUG_PORT):
                         # Phai bat Network + tha debugger cho MOI target de no chay tiep.
                         await send("Network.enable", {}, sid=sid)
                         await send("Runtime.runIfWaitingForDebugger", {}, sid=sid)
-                elif method == "Network.requestWillBeSent" and msg.get("sessionId") in sw_sessions:
-                    r = pr.get("request", {})
-                    r["_cdp_type"] = pr.get("type", "")
-                    _record_cdp_request(r, events)
+                elif method == "Network.requestWillBeSent":
+                    sid = msg.get("sessionId")
+                    if sid in sw_sessions:
+                        r = pr.get("request", {})
+                        r["_cdp_type"] = pr.get("type", "")
+                        _record_cdp_request(r, events)
+                    else:
+                        # Session page/iframe: GHI PROVENANCE (additive), KHONG dung network_requests.
+                        req = pr.get("request", {})
+                        url = req.get("url", "")
+                        if url.startswith("http"):
+                            host = _host_of(url)
+                            if host and "." in host:
+                                ext = _initiator_is_extension(pr.get("initiator", {}))
+                                prov = events.setdefault("request_provenance", {})
+                                # host duoc extension khoi tao du 1 lan => danh dau True
+                                prov[host] = bool(prov.get(host, False) or ext)
     except Exception as e:
         events["errors"].append(f"cdp_sw_sensor_error: {str(e)[:120]}")
