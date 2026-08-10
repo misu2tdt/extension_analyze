@@ -129,33 +129,46 @@ def _manifest_declared_hosts(manifest: dict) -> set:
 
 def detect_undeclared_domains(events: dict) -> dict:
     """
-    TIN HIEU DYNAMIC: domain extension GOI luc chay ma KHONG khai bao trong manifest.
-    Tach rieng nguon service_worker vs page (SW dang ngo hon).
-    Loc bo host do harness ghe.
+    TIN HIEU DYNAMIC: domain do EXTENSION goi luc chay ma KHONG khai bao trong manifest.
+    Provenance (GD3): chi tinh host do extension khoi tao --
+      - from_sw:  network_requests origin=service_worker
+      - from_cs:  request_provenance ext_initiated=True (content script, isolated world)
+    BO host chi do TRANG khoi tao (page-initiated) -- do la traffic cua trang extension
+    mo, khong phai hanh vi extension (ref: web content provenance, Arshad et al. RAID'16).
+    Do luong: 73% traffic malware / 92% benign la page-initiated => nhieu.
     """
     manifest = events.get("manifest", {})
     declared = _manifest_declared_hosts(manifest)
 
-    from_sw, from_page = set(), set()
+    def _keep(host):
+        return (_is_real_domain(host) and host not in HARNESS_HOSTS
+                and host not in declared
+                and not any(known in host for known in KNOWN_INFRA_HOSTS))
+
+    # Nguon 1: service worker (tu network_requests)
+    from_sw = set()
     for r in events.get("network_requests", []):
         url = r.get("url", "")
-        if url.startswith(_INTERNAL_SCHEMES):      # Fix A: bo request noi bo extension
+        if url.startswith(_INTERNAL_SCHEMES):
+            continue
+        if r.get("origin") != "service_worker":
             continue
         host = _host_of(url)
-        if not _is_real_domain(host) or host in HARNESS_HOSTS or host in declared:
-            continue
-        if any(known in host for known in KNOWN_INFRA_HOSTS):
-            continue
-        if r.get("origin") == "service_worker":
+        if _keep(host):
             from_sw.add(host)
-        else:
-            from_page.add(host)
 
+    # Nguon 2: content script (tu provenance, ext_initiated=True)
+    from_cs = set()
+    for host, ext in (events.get("request_provenance", {}) or {}).items():
+        if ext and _keep(host):
+            from_cs.add(host)
+
+    from_ext = from_sw | from_cs
     return {
         "undeclared_from_sw": sorted(from_sw),
-        "undeclared_from_page": sorted(from_page),
-        "undeclared_total": sorted(from_sw | from_page),
-        "has_undeclared": bool(from_sw or from_page),
+        "undeclared_from_cs": sorted(from_cs),
+        "undeclared_total": sorted(from_ext),
+        "has_undeclared": bool(from_ext),
     }
 
 
@@ -463,11 +476,11 @@ def _dynamic_score(report: dict) -> int:
 
     dyn = report.get("dynamic", {}).get("undeclared_domains", {})
     sw_hosts = dyn.get("undeclared_from_sw", [])
-    page_hosts = dyn.get("undeclared_from_page", [])
-    if sw_hosts or page_hosts:
+    cs_hosts = dyn.get("undeclared_from_cs", [])
+    if sw_hosts or cs_hosts:
         base = (DYNAMIC_WEIGHTS["undeclared_domain_sw"] if sw_hosts
                 else DYNAMIC_WEIGHTS["undeclared_domain_page"])
-        extra = (len(sw_hosts) + len(page_hosts) - 1) * DYNAMIC_WEIGHTS["undeclared_per_extra"]
+        extra = (len(sw_hosts) + len(cs_hosts) - 1) * DYNAMIC_WEIGHTS["undeclared_per_extra"]
         score += min(base + max(0, extra), DYNAMIC_WEIGHTS["undeclared_cap"])
 
     if ind.get("unsolicited_tab"):

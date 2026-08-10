@@ -18,6 +18,11 @@ fake_events = {
         {"url": "https://canary-frame.invalid/y.html", "origin": "page"},
         {"url": "https://example.com/", "origin": "page"},          # harness -> phai loc
     ],
+    # GD3: provenance quyet dinh host "page" nao thuc ra la content-script khoi tao.
+    "request_provenance": {
+        "canary-inject.invalid": True,    # content script (isolated world) tu chen -> tinh
+        "canary-frame.invalid": False,    # trang tu tai -> BO (khong phai hanh vi extension)
+    },
     "honeypot_exfil": True,
     "page_hang_count": 0,
 }
@@ -25,7 +30,8 @@ fake_events = {
 r = detect_undeclared_domains(fake_events)
 assert r["has_undeclared"] is True, "phai phat hien undeclared"
 assert "canary-c2.invalid" in r["undeclared_from_sw"], "SW C2 phai bi bat"
-assert "canary-inject.invalid" in r["undeclared_from_page"], "page domain phai bi bat"
+assert "canary-inject.invalid" in r["undeclared_from_cs"], "content-script domain phai bi bat"
+assert "canary-frame.invalid" not in r["undeclared_total"], "page-initiated phai bi loc (GD3)"
 assert "example.com" not in r["undeclared_total"], "harness phai bi loc"
 print("detect PASS:", r)
 
@@ -301,6 +307,9 @@ ev_filter = {
         {"url": "https://cloudapi.stream/gate", "host": "cloudapi.stream", "origin": "service_worker"},
         {"url": "https://julia-info.kiev.ua/c", "host": "julia-info.kiev.ua", "origin": "page"},
     ],
+    # GD3: julia-info.kiev.ua thuc ra do content script goi (isolated world) -> tinh.
+    # Cac host page-initiated khac (fonts/cloudflare/yandex) khong co provenance => bi loc.
+    "request_provenance": {"julia-info.kiev.ua": True},
     "honeypot_exfil": False, "page_hang_count": 0,
 }
 res = detect_undeclared_domains(ev_filter)
@@ -309,5 +318,24 @@ assert res["undeclared_total"] == ["cloudapi.stream", "julia-info.kiev.ua"], \
 assert "ddbnhhjangoagiipejagamkakncbpipp" not in res["undeclared_total"], "extension-id phai bi loai"
 assert "fonts.googleapis.com" not in res["undeclared_total"], "ha tang lanh phai bi loai"
 print("PASS loc undeclared:", res["undeclared_total"])
+
+print("\n=== TEST PROVENANCE: chi tinh domain do EXTENSION goi (GD3) ===")
+ev_prov = {
+    "manifest": {"name": "p", "host_permissions": [], "permissions": []},
+    "network_requests": [
+        {"url": "https://c2-sw.evil.top/g", "host": "c2-sw.evil.top", "origin": "service_worker"},
+    ],
+    "request_provenance": {
+        "c2-cs.evil.top": True,        # content script goi => TINH
+        "tracker-of-page.com": False,  # trang goi => BO
+        "fonts.googleapis.com": False, # trang goi (ha tang) => BO
+    },
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_undeclared_domains(ev_prov)
+assert res["undeclared_total"] == ["c2-cs.evil.top", "c2-sw.evil.top"], \
+    f"chi SW + CS-ext duoc tinh, duoc {res['undeclared_total']}"
+assert "tracker-of-page.com" not in res["undeclared_total"], "page-initiated phai bi bo"
+print("PASS provenance:", res["undeclared_total"])
 
 print("\nTAT CA PASS")
