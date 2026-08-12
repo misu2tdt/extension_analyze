@@ -1,0 +1,11 @@
+{
+  "name": "ExtAnalyze Canary - API Hook (GD1)",
+  "version": "1.0",
+  "manifest_version": 3,
+  "description": "Test fixture toi thieu - kiem chung sensor #7 (api_calls) bat runtime.setUninstallURL, Function, eval",
+  "permissions": [],
+  "background": { "service_worker": "service_worker.js" },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["content.js"], "run_at": "document_idle" }
+  ]
+}

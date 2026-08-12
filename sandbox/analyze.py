@@ -121,6 +121,7 @@ async def analyze_extension(crx_path: str, output_dir: str):
         "honeypot_exfil_details": [],
         "honeypot_stored": False,
         "page_hang_count": 0,
+        "api_calls": [],  # sensor #7 GD1 (cdp_sw.py): Chrome API hooks trong service worker
         "summary": {},
     }
 
