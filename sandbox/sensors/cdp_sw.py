@@ -31,6 +31,23 @@ from utils import _host_of
 # alarm/webRequest callback...), KHONG dam bao bat cac API goi dong bo o top-level luc
 # SW vua khoi dong. Vi vay canary_apihook.js trigger qua onMessage (giong content.js
 # cua canary cu), khong goi truc tiep o top-level.
+#
+# Da thu "Loi 2" (buoc SW restart de no chay lai top-level sau khi hook da gan):
+#   - ServiceWorker.enable/stopAllWorkers cap browser-root: loi -32601 (sai scope,
+#     domain nay chi kha dung tren session page, khong phai browser-root).
+#   - Runtime.evaluate goi self.registration.update()/unregister() TREN CHINH session
+#     SW da attach: XAC NHAN SW co chay lai top-level that (dem duoc 2 lan khoi dong
+#     thay vi 1), nhung (a) van khong bat duoc API goi o lan chay lai (nghi do do tre
+#     asyncio.sleep tu them vao lai tao ra dung race muon giai), va (b) unregister()
+#     lam mat trang thai JS giua chung, GAY REGRESSION cho cac phep do hanh vi khac
+#     (beaconing qua nhieu lan goi lien tiep bi mat, smoke_test tut tu 13/13 xuong
+#     11/13). => BO huong nay, khong dua vao production.
+#   Huong giai dung (Future Work, CHUA LAM): nap extension SAU khi da thiet lap CDP
+#   hook (Target.setAutoAttach + waitForDebuggerOnStart), thay vi qua --load-extension
+#   luc launch browser (hien --load-extension chay SW ngay khi Chromium khoi dong,
+#   truoc ca khi Python kip mo websocket CDP rieng cua cdp_sw.py - xem phases/actions.py
+#   va analyze.py, thu tu: launch_persistent_context -> tao cdp_task -> _phase_load).
+#   Doi hoi sua thu tu launch trong analyze.py, ngoai pham vi file nay.
 _API_HOOK_JS = """
 (function(){
   if (self.__apihook) return; self.__apihook = true;
