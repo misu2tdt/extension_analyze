@@ -2,10 +2,17 @@
 Test tang phan tich TACH KHOI sandbox: khong can Docker/browser,
 chi can du lieu events -> kiem tra dien giai dung.
 Chay: python worker/test_undeclared.py
+
+LUU Y domain gia lap: dung hau to ".evil-test" (KHONG dung ".invalid") cho cac host
+"doc hai" mo phong trong fixture, vi ".invalid" gio bi _is_harness_host() loai (RFC 6761,
+domain nay khong bao gio resolve that => that ra la dau hieu chac chan cua canary/test
+infra trong PRODUCTION, xem HARNESS_HOSTS). Neu dung ".invalid" o day cac assert ve
+"phai bi phat hien" se that bai vi bi loc mat.
 """
 from risk import (
     detect_undeclared_domains, detect_unsolicited_tabs, detect_script_injection,
     detect_local_harvest, detect_beaconing, build_behavioral_report, compute_risk_score,
+    _manifest_declared_hosts, _is_declared_host, _is_known_infra_host,
 )
 
 # events toi gian mo phong canary: SW goi domain la, page goi domain la,
@@ -13,15 +20,15 @@ from risk import (
 fake_events = {
     "manifest": {"name": "canary", "host_permissions": [], "permissions": []},
     "network_requests": [
-        {"url": "https://canary-c2.invalid/collect", "origin": "service_worker"},
-        {"url": "https://canary-inject.invalid/x.js", "origin": "page"},
-        {"url": "https://canary-frame.invalid/y.html", "origin": "page"},
+        {"url": "https://canary-c2.evil-test/collect", "origin": "service_worker"},
+        {"url": "https://canary-inject.evil-test/x.js", "origin": "page"},
+        {"url": "https://canary-frame.evil-test/y.html", "origin": "page"},
         {"url": "https://example.com/", "origin": "page"},          # harness -> phai loc
     ],
     # GD3: provenance quyet dinh host "page" nao thuc ra la content-script khoi tao.
     "request_provenance": {
-        "canary-inject.invalid": True,    # content script (isolated world) tu chen -> tinh
-        "canary-frame.invalid": False,    # trang tu tai -> BO (khong phai hanh vi extension)
+        "canary-inject.evil-test": True,    # content script (isolated world) tu chen -> tinh
+        "canary-frame.evil-test": False,    # trang tu tai -> BO (khong phai hanh vi extension)
     },
     "honeypot_exfil": True,
     "page_hang_count": 0,
@@ -29,9 +36,9 @@ fake_events = {
 
 r = detect_undeclared_domains(fake_events)
 assert r["has_undeclared"] is True, "phai phat hien undeclared"
-assert "canary-c2.invalid" in r["undeclared_from_sw"], "SW C2 phai bi bat"
-assert "canary-inject.invalid" in r["undeclared_from_cs"], "content-script domain phai bi bat"
-assert "canary-frame.invalid" not in r["undeclared_total"], "page-initiated phai bi loc (GD3)"
+assert "canary-c2.evil-test" in r["undeclared_from_sw"], "SW C2 phai bi bat"
+assert "canary-inject.evil-test" in r["undeclared_from_cs"], "content-script domain phai bi bat"
+assert "canary-frame.evil-test" not in r["undeclared_total"], "page-initiated phai bi loc (GD3)"
 assert "example.com" not in r["undeclared_total"], "harness phai bi loc"
 print("detect PASS:", r)
 
@@ -122,6 +129,44 @@ assert res["count"] == 1, f"chi 1 node cross-origin, duoc {res['count']}"
 assert res["injected_nodes"][0]["host"] == "evil-cdn.xyz"
 print("PASS:", res)
 
+print("\n=== TEST SCRIPT INJECTION - TIER-2 welcome-tab discount ===")
+# Mo phong dung pattern phat hien o grammarly/rakuten/honey: extension tu mo tab
+# welcome toi domain ngoai (vendor.example), trang do tu tai script quang cao cua
+# CHINH NO -> phai bi loai. Nhung injection tren trang honeypot (localhost) cua minh
+# thi PHAI GIU NGUYEN, du cung mau.
+ev_welcome = {
+    "manifest": {"name": "w", "host_permissions": [], "permissions": []},
+    "network_requests": [],
+    "new_tabs": [
+        {"url": "https://vendor.example/welcome?utm=chrome", "phase": "load"},
+    ],
+    "dom_activity": [
+        # script cua CHINH trang welcome (vd GTM/ads tu vendor.example tu tai) -> LOAI
+        {"type": "node_injected", "tag": "SCRIPT", "src": "https://ads.doubleclick.net/x.js",
+         "page_url": "https://vendor.example/welcome?utm=chrome"},
+        # extension van inject that tren trang honeypot cua minh -> GIU
+        {"type": "node_injected", "tag": "SCRIPT", "src": "https://evil-cdn.xyz/y.js",
+         "page_url": "http://localhost:8888/bank.html"},
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_script_injection(ev_welcome)
+assert res["count"] == 1, f"chi giu 1 node (honeypot page), duoc {res['count']}: {res['injected_nodes']}"
+assert res["injected_nodes"][0]["host"] == "evil-cdn.xyz", "phai giu injection tren honeypot page"
+assert not any(n["host"] == "ads.doubleclick.net" for n in res["injected_nodes"]), \
+    "script cua CHINH trang welcome-tab-vendor phai bi loai (Tier-2)"
+print("PASS Tier-2 discount (welcome page bo, honeypot page giu):", res)
+
+# Doi chung: neu host welcome-tab TRUNG voi target_matched_hosts (extension co ly do
+# rieng nham vao domain do, vd rakuten.com vua la welcome-host vua la target host) ->
+# KHONG duoc loai, phai giu nguyen (uu tien khong bo oan).
+ev_welcome_target = dict(ev_welcome)
+ev_welcome_target["target_matched_hosts"] = ["vendor.example"]
+res2 = detect_script_injection(ev_welcome_target)
+assert res2["count"] == 2, \
+    f"host vua la welcome vua la target_matched -> KHONG duoc loai, duoc {res2['count']}"
+print("PASS Tier-2 khong over-discount khi host trung target_matched:", res2)
+
 print("\n=== TEST LOCAL HARVEST ===")
 ev_harvest = {
     "manifest": {"name": "h", "host_permissions": [], "permissions": []},
@@ -158,11 +203,11 @@ def _req(url, t, phase="honeypot_pages", origin="service_worker"):
 ev_beacon = {
     "manifest": {"name": "b", "host_permissions": [], "permissions": []},
     "network_requests": [
-        _req("https://beacon-c2.invalid/p", 1.0, "honeypot_pages"),
-        _req("https://beacon-c2.invalid/p", 3.0, "honeypot_pages"),
-        _req("https://beacon-c2.invalid/p", 5.0, "target_matched"),
-        _req("https://beacon-c2.invalid/p", 7.0, "extension_pages"),
-        _req("https://beacon-c2.invalid/p", 9.0, "delayed_observation"),
+        _req("https://beacon-c2.evil-test/p", 1.0, "honeypot_pages"),
+        _req("https://beacon-c2.evil-test/p", 3.0, "honeypot_pages"),
+        _req("https://beacon-c2.evil-test/p", 5.0, "target_matched"),
+        _req("https://beacon-c2.evil-test/p", 7.0, "extension_pages"),
+        _req("https://beacon-c2.evil-test/p", 9.0, "delayed_observation"),
     ],
     "honeypot_exfil": False, "page_hang_count": 0,
 }
@@ -170,7 +215,7 @@ res = detect_beaconing(ev_beacon)
 assert res["has_beaconing"] is True
 assert res["count"] == 1, f"chi 1 beacon, duoc {res['count']}"
 b0 = res["beacons"][0]
-assert b0["host"] == "beacon-c2.invalid"
+assert b0["host"] == "beacon-c2.evil-test"
 assert b0["count"] == 5, f"5 request, duoc {b0['count']}"
 assert b0["cv"] == 0.0, f"deu tuyet doi cv phai 0.0, duoc {b0['cv']}"
 assert b0["interval_mean_s"] == 2.0
@@ -189,11 +234,11 @@ print(f"score PASS: dynamic={bd['dynamic_score']} (undeclared_sw 30 + beacon 20)
 ev_jitter = {
     "manifest": {"name": "j", "host_permissions": [], "permissions": []},
     "network_requests": [
-        _req("https://jitter.invalid/x", 1.0),
-        _req("https://jitter.invalid/x", 1.5),
-        _req("https://jitter.invalid/x", 4.0),
-        _req("https://jitter.invalid/x", 4.2),
-        _req("https://jitter.invalid/x", 9.0),
+        _req("https://jitter.evil-test/x", 1.0),
+        _req("https://jitter.evil-test/x", 1.5),
+        _req("https://jitter.evil-test/x", 4.0),
+        _req("https://jitter.evil-test/x", 4.2),
+        _req("https://jitter.evil-test/x", 9.0),
     ],
     "honeypot_exfil": False, "page_hang_count": 0,
 }
@@ -204,9 +249,9 @@ print("PASS jitter -> khong beacon")
 ev_sparse = {
     "manifest": {"name": "s", "host_permissions": [], "permissions": []},
     "network_requests": [
-        _req("https://sparse.invalid/x", 2.0),
-        _req("https://sparse.invalid/x", 4.0),
-        _req("https://sparse.invalid/x", 6.0),
+        _req("https://sparse.evil-test/x", 2.0),
+        _req("https://sparse.evil-test/x", 4.0),
+        _req("https://sparse.evil-test/x", 6.0),
     ],
     "honeypot_exfil": False, "page_hang_count": 0,
 }
@@ -216,7 +261,7 @@ print("PASS sparse -> insufficient samples")
 # (4) AM - tight loop: interval 0.1s < MIN_PERIOD_S du cv=0 => khong phai beacon.
 ev_loop = {
     "manifest": {"name": "l", "host_permissions": [], "permissions": []},
-    "network_requests": [_req("https://loop.invalid/x", 1.0 + i * 0.1) for i in range(5)],
+    "network_requests": [_req("https://loop.evil-test/x", 1.0 + i * 0.1) for i in range(5)],
     "honeypot_exfil": False, "page_hang_count": 0,
 }
 assert detect_beaconing(ev_loop)["has_beaconing"] is False, "tight loop khong phai beacon"
@@ -319,6 +364,31 @@ assert "ddbnhhjangoagiipejagamkakncbpipp" not in res["undeclared_total"], "exten
 assert "fonts.googleapis.com" not in res["undeclared_total"], "ha tang lanh phai bi loai"
 print("PASS loc undeclared:", res["undeclared_total"])
 
+print("\n=== TEST PHAN A: *.invalid (canary/test host) phai bi loai khoi undeclared ===")
+# RFC 6761: .invalid khong bao gio resolve that => trong PRODUCTION chi co the la
+# artifact cua canary/harness (vd sponsorblock bi leak canary-page.invalid, xem
+# eval/_verify/benign_fp/verdict.md), khong bao gio la C2 that (C2 that phai resolve
+# duoc). Test nay khac voi cac fixture ".evil-test" o tren (mo phong domain doc hai gia
+# lap, khong lien quan RFC 6761).
+ev_dotinvalid = {
+    "manifest": {"name": "di", "host_permissions": [], "permissions": []},
+    "network_requests": [
+        {"url": "https://real-c2.evil-test/collect", "host": "real-c2.evil-test",
+         "origin": "service_worker"},
+    ],
+    "request_provenance": {
+        "canary-page.invalid": True,   # artifact canary/harness -> PHAI bi loai
+        "some-leaked.invalid": True,   # bat ky host *.invalid nao -> PHAI bi loai
+    },
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_undeclared_domains(ev_dotinvalid)
+assert res["undeclared_total"] == ["real-c2.evil-test"], \
+    f"chi domain that (khong .invalid) duoc tinh, duoc {res['undeclared_total']}"
+assert "canary-page.invalid" not in res["undeclared_total"], "canary-page.invalid phai bi loai"
+assert "some-leaked.invalid" not in res["undeclared_total"], "moi host *.invalid phai bi loai"
+print("PASS loc *.invalid (Phan A):", res["undeclared_total"])
+
 print("\n=== TEST PROVENANCE: chi tinh domain do EXTENSION goi (GD3) ===")
 ev_prov = {
     "manifest": {"name": "p", "host_permissions": [], "permissions": []},
@@ -337,5 +407,53 @@ assert res["undeclared_total"] == ["c2-cs.evil.top", "c2-sw.evil.top"], \
     f"chi SW + CS-ext duoc tinh, duoc {res['undeclared_total']}"
 assert "tracker-of-page.com" not in res["undeclared_total"], "page-initiated phai bi bo"
 print("PASS provenance:", res["undeclared_total"])
+
+print("\n=== TEST WILDCARD PERMISSION PARSE (fix #3) ===")
+# https://*.example.com/* phai duoc phan loai la wildcard subdomain, KHONG phai host
+# gia "x.example.com" (bug cu: replace("*","x") bien *.example.com -> x.example.com,
+# 1 host LITERAL sai hoan toan, khien api.example.com bi coi undeclared oan).
+declared_wc = _manifest_declared_hosts({"host_permissions": ["https://*.example.com/*"]})
+assert "example.com" in declared_wc["wildcards"], declared_wc
+assert _is_declared_host("api.example.com", declared_wc) is True, \
+    "subdomain cua wildcard phai duoc coi la DA KHAI BAO"
+assert _is_declared_host("example.com", declared_wc) is True, \
+    "chinh base domain cua wildcard cung phai duoc coi la DA KHAI BAO"
+assert _is_declared_host("api.other.com", declared_wc) is False, \
+    "host khong lien quan KHONG duoc coi la khai bao"
+print("PASS wildcard *.example.com -> api.example.com/example.com declared, api.other.com khong")
+
+# <all_urls> (hoac *://*/*) bi BO QUA hoan toan khi tinh declared (KHONG "mien tru" host
+# nao). Do luong tren malware that: coi <all_urls> la declares_all=True khien 22/22 mau
+# injector mat flag undeclared_domain_contact (recall loi 0.938->0.600) vi <all_urls> la
+# pattern PHO BIEN NHAT trong malware (broad permission grab) - qua nguy hiem de "mien
+# tru". Nen host van la undeclared binh thuong du manifest co <all_urls>.
+declared_all = _manifest_declared_hosts({"host_permissions": ["<all_urls>"]})
+assert declared_all["exact"] == set() and declared_all["wildcards"] == set(), declared_all
+assert _is_declared_host("bat-ky-domain-nao.xyz", declared_all) is False, \
+    "<all_urls> KHONG duoc mien tru host nao khoi undeclared (an toan hon declares_all)"
+print("PASS <all_urls> -> khong dong gop declared nao, host van bi tinh undeclared binh thuong")
+
+# KNOWN_INFRA_HOSTS phai so khop EXACT/SUFFIX, KHONG phai substring: domain gia mao
+# chua ten ha tang lanh (vd google.com.attacker.tld) KHONG duoc coi la infra.
+assert _is_known_infra_host("google.com") is True
+assert _is_known_infra_host("accounts.google.com") is True, "subdomain that cua infra phai khop"
+assert _is_known_infra_host("google.com.attacker.tld") is False, \
+    "domain gia mao CHUA ten ha tang lanh KHONG duoc coi la infra (substring bug cu)"
+print("PASS KNOWN_INFRA_HOSTS exact/suffix match, khong con substring bug")
+
+# End-to-end: undeclared_domain khong con flag oan khi extension khai bao dung wildcard.
+# Dung domain KHONG nam trong KNOWN_INFRA_HOSTS (myservice-abc.io) de cach ly dung tin
+# hieu dang test (declared-wildcard), khong lan voi infra-allowlist.
+ev_wc_declared = {
+    "manifest": {"name": "wc", "host_permissions": ["https://*.myservice-abc.io/*"], "permissions": []},
+    "network_requests": [
+        {"url": "https://api.myservice-abc.io/data", "origin": "service_worker"},
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_undeclared_domains(ev_wc_declared)
+assert res["has_undeclared"] is False, \
+    f"host da khai bao qua wildcard KHONG duoc flag undeclared, duoc {res}"
+print("PASS end-to-end: wildcard declared -> khong con undeclared oan")
 
 print("\nTAT CA PASS")

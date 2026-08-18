@@ -44,6 +44,17 @@ HARNESS_HOSTS = {
 # Phase ma HARNESS chu dong mo tab => tab o day khong phai extension tu mo.
 HARNESS_PHASES = {"honeypot_pages", "extension_pages"}
 
+
+def _is_harness_host(host: str) -> bool:
+    """True neu host la cua HARNESS/canary test, khong phai internet that.
+    .invalid la TLD danh rieng cho test theo RFC 6761 (khong bao gio hop le tren mang
+    that) - dung cho moi domain canary trong sandbox/canary/, sandbox/honey_pages/ (vd
+    canary-page.invalid, canary-cs.invalid, canary-c2.invalid, canary-beacon.invalid...)
+    ma khong can liet ke tung ten. Phat hien qua verify FP (sponsorblock bi leak
+    canary-page.invalid vao undeclared_domain do HARNESS_HOSTS truoc day chi liet ke
+    cung 4 host, thieu *.invalid)."""
+    return bool(host) and (host in HARNESS_HOSTS or host.endswith(".invalid"))
+
 # Trong so cham diem dynamic. Gom mot cho de tinh chinh o chuong thuc nghiem.
 DYNAMIC_WEIGHTS = {
     "undeclared_domain_sw": 30,     # SW goi domain la => C2 ngam, nang hon
@@ -85,6 +96,15 @@ def _is_real_domain(host: str) -> bool:
     return bool(host) and "." in host
 
 
+def _is_known_infra_host(host: str) -> bool:
+    """True neu host la ha tang biet lanh (KNOWN_INFRA_HOSTS), so khop EXACT hoac SUFFIX
+    (host == infra hoac host.endswith("."+infra)). Truoc day dung substring ("in") khien
+    "google.com" khop ca "google.com.attacker.tld" (allowlist bi qua mat bang domain gia
+    mao chua ten ha tang lanh)."""
+    return bool(host) and any(host == infra or host.endswith("." + infra)
+                               for infra in KNOWN_INFRA_HOSTS)
+
+
 def _extract_suspicious_hosts(manifest: dict) -> list:
     name = (manifest.get("name", "") or "").lower()
     desc = (manifest.get("description", "") or "").lower()
@@ -102,7 +122,7 @@ def _extract_suspicious_hosts(manifest: dict) -> list:
 
     suspicious = []
     for h in hosts:
-        if any(known in h for known in KNOWN_INFRA_HOSTS):
+        if _is_known_infra_host(h):
             continue
         if "amazon" in h or "google" in h or "facebook" in h:
             continue
@@ -112,19 +132,60 @@ def _extract_suspicious_hosts(manifest: dict) -> list:
     return sorted(set(suspicious))
 
 
-def _manifest_declared_hosts(manifest: dict) -> set:
-    """Host ma extension KHAI BAO trong manifest (host_permissions + content_scripts)."""
-    declared = set()
+ALL_HOSTS_PATTERNS = {"<all_urls>", "*://*/*", "http://*/*", "https://*/*"}
+
+
+def _classify_declared_pattern(pattern: str, wildcards: set, exact: set) -> None:
+    """Phan loai 1 match pattern (host_permission hoac content_script match) vao
+    declared_wildcards / declared_exact.
+
+    Match-all pattern (<all_urls>, *://*/*...) bi BO QUA hoan toan (khong dong gop gi
+    vao declared): neu coi no la "khai bao moi host" thi undeclared_domain_contact se
+    KHONG BAO GIO bat duoc extension nao xin <all_urls> - ma day la pattern PHO BIEN
+    NHAT trong malware that (broad permission grab). Do luong: 22/22 mau injector bi
+    mat flag khi thu declares_all=True (recall lõi 0.938 -> 0.600) deu do <all_urls>,
+    KHONG phai do wildcard subdomain - nen bo phuong an declares_all, chon huong an
+    toan hon: <all_urls> khong "mien tru" host nao ca."""
+    if pattern in ALL_HOSTS_PATTERNS:
+        return
+    # Bo scheme truoc khi xet wildcard subdomain, tranh "*://*.example.com/*"
+    # bi hong khi replace "*://" -> "https://" (con lai "https:*.example.com").
+    p = pattern.split("://", 1)[-1]
+    host_part = p.split("/", 1)[0]
+    if host_part.startswith("*."):
+        base = host_part[2:].lower()
+        if base and "*" not in base:
+            wildcards.add(base)
+            return
+    h = _host_of(pattern.replace("*://", "https://").replace("*", "x"))
+    if h:
+        exact.add(h)
+
+
+def _manifest_declared_hosts(manifest: dict) -> dict:
+    """Host ma extension KHAI BAO trong manifest (host_permissions + content_scripts).
+    Tra ve dict {exact, wildcards} thay vi set phang, vi wildcard (*.example.com) khong
+    the quy ve 1 host cu the ma phai so khop theo suffix luc dung (xem _is_declared_host).
+    Truoc day "*" bi thay bang ky tu "x" -> *.example.com thanh "x.example.com" (host
+    GIA, sai hoan toan) khien api.example.com bi coi la undeclared oan du extension da
+    khai bao dung wildcard cha no."""
+    wildcards, exact = set(), set()
     for hp in manifest.get("host_permissions", []):
-        h = _host_of(hp.replace("*://", "https://").replace("*", "x"))
-        if h:
-            declared.add(h)
+        _classify_declared_pattern(hp, wildcards, exact)
     for cs in manifest.get("content_scripts", []):
         for m in cs.get("matches", []):
-            h = _host_of(m.replace("*://", "https://").replace("*", "x"))
-            if h:
-                declared.add(h)
-    return declared
+            _classify_declared_pattern(m, wildcards, exact)
+    return {"exact": exact, "wildcards": wildcards}
+
+
+def _is_declared_host(host: str, declared: dict) -> bool:
+    """True neu host duoc coi la DA KHAI BAO theo declared tra ve tu
+    _manifest_declared_hosts: khop exact, hoac khop wildcard (host == base hoac la
+    subdomain cua base). <all_urls>/match-all KHONG lam host nao duoc coi la declared
+    (xem _classify_declared_pattern)."""
+    if host in declared["exact"]:
+        return True
+    return any(host == base or host.endswith("." + base) for base in declared["wildcards"])
 
 
 def detect_undeclared_domains(events: dict) -> dict:
@@ -141,9 +202,9 @@ def detect_undeclared_domains(events: dict) -> dict:
     declared = _manifest_declared_hosts(manifest)
 
     def _keep(host):
-        return (_is_real_domain(host) and host not in HARNESS_HOSTS
-                and host not in declared
-                and not any(known in host for known in KNOWN_INFRA_HOSTS))
+        return (_is_real_domain(host) and not _is_harness_host(host)
+                and not _is_declared_host(host, declared)
+                and not _is_known_infra_host(host))
 
     # Nguon 1: service worker (tu network_requests)
     from_sw = set()
@@ -193,13 +254,49 @@ def detect_unsolicited_tabs(events: dict) -> dict:
     }
 
 
+def _welcome_tab_external_hosts(events: dict) -> set:
+    """
+    TIER-2 discount cho script_injection: trang do CHINH EXTENSION tu mo lam tab
+    welcome/onboarding (new_tabs, KHONG phai phase harness) toi mot domain BEN NGOAI
+    that ra la TRANG CUA VENDOR (vd grammarly.com/extension-success tu tai GTM/Taboola/
+    DoubleClick...) - script tren trang do la CUA TRANG, khong phai do extension chen.
+    Phat hien qua verify FP: rakuten/grammarly/honey bi risk CRITICAL gan nhu hoan toan
+    vi hang chuc script quang cao cua CHINH trang welcome rieng cua ho bi quy nham.
+
+    CHI loai host nao CHAC CHAN la "trang vendor rieng, khong phai trang thu nghiem cua
+    minh": phai la domain that (co dau '.'), KHONG phai harness (localhost/example.com/
+    *.invalid), VA KHONG nam trong target_matched_hosts cua chinh mau (neu extension co
+    content_scripts nham vao dung domain do vi mot ly do khac - vd rakuten.com vua la
+    welcome-host vua la target_matched-host - thi KHONG loai, uu tien giu signal).
+    Khong ro -> khong loai (tha giu signal that hon bo oan, dung nguyen tac cua task).
+    """
+    target_hosts = set(events.get("target_matched_hosts") or [])
+    welcome_hosts = set()
+    for tab in events.get("new_tabs", []):
+        if tab.get("phase") in HARNESS_PHASES:
+            continue  # harness tu mo tab nay, khong phai extension
+        host = _host_of(tab.get("url", ""))
+        if not _is_real_domain(host) or _is_harness_host(host):
+            continue
+        if host in target_hosts:
+            continue  # dong thoi la trang target_matched cua chinh minh -> GIU, khong loai
+        welcome_hosts.add(host)
+    return welcome_hosts
+
+
 def detect_script_injection(events: dict) -> dict:
     """
     TIN HIEU DYNAMIC: extension chen SCRIPT/IFRAME co src CROSS-ORIGIN vao trang.
     Heuristic: node co src tro toi domain KHAC voi trang dang xem => dang ngo.
     Node inline / same-origin => bo (khong phan biet duoc voi node cua chinh trang).
     Gioi han: khong bat duoc inline injection (can taint tracking nhu Arcanum).
+
+    TIER-2 (xem _welcome_tab_external_hosts): bo qua node xuat hien tren trang welcome-
+    tab-vendor ma CHINH EXTENSION tu mo - day la script CUA TRANG, khong phai extension
+    chen. Neu extension inject script that tren mot trang khac (vd honeypot/target_matched
+    hoac bat ky trang nao KHAC voi tab welcome), tin hieu van duoc giu nguyen ven.
     """
+    welcome_hosts = _welcome_tab_external_hosts(events)
     injected = []
     for act in events.get("dom_activity", []):
         if act.get("type") != "node_injected":
@@ -208,11 +305,13 @@ def detect_script_injection(events: dict) -> dict:
         if not src or src == "(inline)":
             continue
         node_host = _host_of(src)
-        if not node_host or node_host in HARNESS_HOSTS:
+        if not node_host or _is_harness_host(node_host):
             continue
         page_host = _host_of(act.get("page_url", ""))
         if node_host == page_host:
             continue
+        if page_host in welcome_hosts:
+            continue  # Tier-2: script cua chinh trang welcome-tab-vendor, khong phai extension chen
         injected.append({"tag": act.get("tag"), "src": src, "host": node_host})
     return {
         "injected_nodes": injected,
@@ -264,7 +363,7 @@ def detect_beaconing(events: dict) -> dict:
             continue
         t = r.get("t")
         host = r.get("host") or _host_of(url)
-        if t is None or not _is_real_domain(host) or host in HARNESS_HOSTS:
+        if t is None or not _is_real_domain(host) or _is_harness_host(host):
             continue
         by_host.setdefault(host, []).append(
             {"t": t, "phase": r.get("phase"), "origin": r.get("origin")})
