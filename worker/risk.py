@@ -2,6 +2,84 @@
 Risk scoring + behavioral report builder.
 Signal thiet ke dua tren hanh vi THAT tu 4 malware sample (chien dich 108-extension):
   - Overprivilege, suspicious host, broad content-script scope, page hang, honeypot exfil
+
+==================== LIMITATION DA BIET: self-domain / self-brand ====================
+Nhieu FP benign (Dark Reader, Bitwarden, Grammarly, NordPass, LanguageTool, Ghostery,
+Dashlane, Evernote, Momentum...) bi tinh `undeclared_domain_contact` vi service worker cua
+chinh ho goi domain CUA CHINH VENDOR (vd api.bitwarden.com, api.dashlane.com,
+cdn.ghostery.com) ma khong khai trong host_permissions; hoac bi tinh `unsolicited_tab` vi
+tu mo tab welcome toi domain vendor BEN NGOAI (vd bitwarden.com/browser-start,
+darkreader.org/help).
+
+KHONG allowlist theo ten/domain (name-match) cho hai truong hop nay, du "ve mat ten" ro
+rang la cua chinh publisher: discriminator dung phai la HANH VI (goi domain xau da biet /
+redirect ra ngoai), KHONG phai ten/domain co GIONG brand hay khong — vi ten/domain la thu
+ke tan cong TU DO CHON. Ke tan cong hoan toan co the dat ten extension + dang ky domain
+TRUNG NHAU de "qua mat" bat ky allowlist so khop-ten nao (Wang et al. 2018: self-referential
+domain khong phai tin hieu an toan mot minh; Palo Alto Networks VB2025, chien dich
+108-extension: C2 domain la mot host RIENG, nhung khong co gi ngan ke tan cong chon domain
+"giong ten" neu ho muon evade kieu allowlist nay).
+
+Da xu ly duoc (an toan, ID-ROBUST, KHONG name-match) — xem _own_extension_ids():
+  - Fix #3 (detect_script_injection): loai node ma PAGE_HOST (trang node xuat hien tren) la
+    CHINH id extension dang chay (chrome-extension://<own-id>/..., id lay tu
+    service_workers[].url — Chrome tu sinh/xac thuc id nay luc load, KHONG phai chuoi
+    ten/domain co the tu chon => khong gia mao duoc). CHI loai theo PAGE_HOST, KHONG loai
+    theo NODE_HOST (src): ban dau du dinh ca loai node ma NODE_HOST la id cua chinh no (vd
+    "widget UI tu chen"), nhung do luong tren malware that cho thay day KHONG an toan - nhieu
+    mau credential-phishing that CHEN CHINH payload dong goi (chrome-extension://<own-id>/
+    js/bridge.js) vao TRANG THU BA that (tiktok.com, notion.so) kem <form> phishing - loai
+    theo node_host se xoa oan tin hieu nay, khien recall tren cohort injector tut 0.97->0.58
+    (23/60 mau). Da REVERT phan node_host, CHI giu phan page_host (xem chi tiet trong
+    docstring detect_script_injection).
+  - Fix #2 (detect_unsolicited_tabs): loai tab toi trang NOI BO cua chinh extension
+    (chrome-extension://<own-id>/...), cung dua tren id that nhu tren. Khong co doi ung ac y
+    tuong duong (mo tab toi trang cua CHINH MINH khong the "tan cong" trang khac), nen giu
+    nguyen ca 2 dieu kien (node/page) an toan hon truong hop script_injection.
+
+CHUA xu ly duoc (limitation, ghi nhan thay vi ep fix):
+  - undeclared_domain_contact: SW goi domain CUA CHINH VENDOR (vd api.dashlane.com) VAN bi
+    tinh la "domain la" — khong co allowlist self-brand (se la name-match, evadable).
+  - unsolicited_tab toi trang BEN NGOAI (vd bitwarden.com/browser-start) VAN giu nguyen tin
+    hieu — khong phan biet duoc an toan voi tab malware mo luc install toi domain ngoai. Da
+    xac nhan qua chinh dataset dang dung: hang loat mau MALWARE mo
+    https://julia-info.kiev.ua/install/<id> luc phase=load — CUNG PATTERN voi tab welcome
+    benign (mo tab luc load, URL "trong nhu" mot trang dich vu), chi khac o domain do co
+    phai C2/tracking doc hai hay khong — thu KHONG suy duoc tu URL/ten mot minh.
+
+Da can nhac va TU CHOI: dung `events["navigations"]` (danh sach toan cuc phang, KHONG gan
+timestamp/tab-id, gom chung frame cua MOI trang dang mo song song — honeypot, target_matched,
+welcome tab...) de suy "tab co redirect ra ngoai sau khi mo hay khong". Kiem tra thuc te tren
+9 mau FP: hau het URL cua welcome-tab KHONG xuat hien lai trong navigations (frame-navigate
+khong bat duoc tab moi trong nhieu truong hop), va vi danh sach khong gan tab/frame nao voi
+navigation nao nen KHONG THE ket luan chac chan "navigation ke tiep" thuoc ve dung tab welcome
+hay mot trang khac dang mo song song. Lam theo huong nay se la DOAN, khong phai bang chung.
+
+Future work (huong literature): domain-reputation signal (domain moi dang ky - NRD,
+threat-intel blocklist nhu Palo Alto dung) de FLAG domain XAU da biet thay vi MIEN TRU domain
+"trong giong" cua chinh minh — danh gia ban than domain (tuoi, reputation, ha tang lien ket)
+thay vi danh gia "co giong ten extension khong", nen khong bi evade boi domain chon trung ten.
+
+==================== LIMITATION KHAC: BRAND/TRADEMARK IMPERSONATION ====================
+Phat hien qua verify 4 mau (`aoemlgniakbojcecmjefonjkgnceklpg`,
+`fgbieegonkgdlkmeaapmkejdlfalonkb`, `hafhkoalnlpoifpidohfjlmeemfifndi`,
+`ifhigdhiifbnjanhacoedbadhmlkjgae` - xem eval/_verify/fn/brand_impersonation_verdict.md):
+extension GIA DANH thuong hieu AI dang hot (Grok/DeepSeek/Perplexity, cung mot "factory"
+`*.easytool.dev`) nhung KHONG co content_scripts, KHONG host_permissions
+(permissions=["storage","sidePanel"] ma thoi) - VE MAT KY THUAT khong the inject/doc bat
+ky trang nao nguoi dung dang xem. Toan bo tin hieu dynamic quan sat duoc (script_injection,
+unsolicited_tab, undeclared_domain) deu chi la hoat dong TRONG trang welcome NOI BO cua
+chinh no (tai bundle JS tu backend rieng) - hoan toan "sach" theo nghia dynamic-behavior.
+
+Day la LOAI HAI KHAC voi cac tin hieu hien co: gia danh TEN GOI/thuong hieu de danh lua
+luot cai, khong phai injection/exfil/C2 runtime. Dynamic-behavior detector (file nay)
+KHONG co - va SE KHONG BAO GIO co - tin hieu nao bat duoc loai nay, vi ban chat no khong
+lien quan hanh vi luc chay: mot extension gia danh thuong hieu van co the hoan toan "sach"
+ve mat dynamic (dung nhu 4 mau tren). Can THEM mot tin hieu METADATA rieng (so sanh
+ten/description/icon voi danh sach thuong hieu pho bien + kiem tra publisher/domain co
+thuoc chinh chu hay khong) - day la huong khac hoan toan voi 5 tin hieu dynamic hien co,
+ghi nhan la future work, KHONG ep vao pham vi file nay.
+========================================================================================
 """
 import statistics
 from urllib.parse import urlparse
@@ -94,6 +172,25 @@ _INTERNAL_SCHEMES = ("chrome-extension://", "chrome://", "moz-extension://",
 def _is_real_domain(host: str) -> bool:
     """Domain thuc su ra ngoai: co dau '.' (loai extension-id 32 ky tu, localhost-like)."""
     return bool(host) and "." in host
+
+
+def _own_extension_ids(events: dict) -> set:
+    """ID (chrome-extension://<id>) cua CHINH extension dang duoc phan tich trong run nay.
+
+    ID-ROBUST, KHONG the gia mao bang ten/domain: lay tu `service_workers[].url` — day la
+    service worker THAT SU duoc Chrome khoi tao cho extension duy nhat dang load trong
+    sandbox (moi run chi load 1 mau, xem CLAUDE.md "ephemeral sandbox"), nen host cua URL
+    nay LA id cua chinh no, khong phai suy doan/so khop ten. KHONG dung `extension_ids_seen`
+    (rong hon, `sandbox/phases/actions.py` gom ca chrome-extension:// url thay tren TRANG
+    - co the la resource cua extension builtin/khac khong lien quan, xac nhan qua verify:
+    grammarly co 3 id trong extension_ids_seen nhung chi 1 id trung voi service_workers).
+    """
+    ids = set()
+    for sw in events.get("service_workers", []):
+        h = _host_of(sw.get("url", ""))
+        if h:
+            ids.add(h)
+    return ids
 
 
 def _is_known_infra_host(host: str) -> bool:
@@ -237,7 +334,19 @@ def detect_unsolicited_tabs(events: dict) -> dict:
     """
     TIN HIEU DYNAMIC: tab do EXTENSION tu mo (khong phai harness).
     Loc bang PHASE: harness chi mo tab trong honeypot_pages/extension_pages.
+
+    FIX #2 (id-robust, KHONG name-match): bo qua tab neu URL la trang NOI BO cua CHINH
+    extension (`chrome-extension://<own-id>/...`, id lay tu _own_extension_ids — id THAT
+    cua run nay, khong doan theo ten/domain). Day la onboarding chuan (options/setup page
+    tu mo trong tab thay vi popup) - KHONG phai "dieu huong nguoi dung ra ngoai".
+
+    KHONG discount tab toi domain BEN NGOAI (vd vendor.com/welcome) du "trong nhu" trang
+    vendor chinh chu: ten/domain co the gia mao (xem docstring _own_extension_ids va muc
+    LIMITATION o cuoi file) - malware cung mo tab toi domain ngoai luc install (vd
+    julia-info.kiev.ua/install/<id> - xac nhan qua dataset that, xem docs/decisions.md).
+    Tab toi domain ngoai LUON duoc giu nguyen tin hieu, bat ke domain do "giong" gi.
     """
+    own_ids = _own_extension_ids(events)
     ext_tabs = []
     for tab in events.get("new_tabs", []):
         phase = tab.get("phase")
@@ -246,6 +355,8 @@ def detect_unsolicited_tabs(events: dict) -> dict:
             continue
         if url in ("", "about:blank"):   # tab rong, bo qua (nang cap sau: theo redirect)
             continue
+        if any(url.startswith(f"chrome-extension://{oid}/") for oid in own_ids):
+            continue  # trang noi bo cua CHINH extension (id that, khong doan)
         ext_tabs.append({"url": url, "phase": phase})
     return {
         "unsolicited_tabs": ext_tabs,
@@ -295,8 +406,29 @@ def detect_script_injection(events: dict) -> dict:
     tab-vendor ma CHINH EXTENSION tu mo - day la script CUA TRANG, khong phai extension
     chen. Neu extension inject script that tren mot trang khac (vd honeypot/target_matched
     hoac bat ky trang nao KHAC voi tab welcome), tin hieu van duoc giu nguyen ven.
+
+    FIX #3 (id-robust, CHI theo PAGE, khong theo NODE): bo qua node neu page_host la CHINH
+    trang noi bo cua extension (`chrome-extension://<own-id>/...`, id tu _own_extension_ids,
+    id THAT lay tu service worker, khong doan theo ten/domain) - node xuat hien tren TRANG
+    CUA CHINH NO (vd welcome.html/options.html tu tai script/iframe) khong phai hanh vi
+    "chen vao trang nguoi dung dang xem".
+
+    QUAN TRONG - CHI loai theo PAGE_HOST, KHONG loai theo NODE_HOST: ban dau du dinh loai
+    ca node ma NODE_HOST (src) la id cua chinh extension (vd widget UI tu chen boi
+    chinh extension) voi ly do "tai nguyen SELF". Do luong tren malware that phat hien day
+    la SAI/khong an toan: nhieu mau credential-phishing that su CHEN CHINH payload dong goi
+    cua no (vd chrome-extension://<own-id>/js/bridge.js) vao TRANG THU BA that (vd
+    tiktok.com, notion.so) kem theo <form> gia dang nhap tro toi tiktok.com/auth,
+    notion.so/auth — day CHINH LA ky thuat tan cong pho bien (dua payload qua
+    web_accessible_resources), KHONG phai UI tu chen vo hai. Loai theo node_host lam
+    recall tren cohort injector tut tu 0.97 xuong 0.58 (23/60 mau credential-phishing that
+    bi mat tin hieu) - VI PHAM nguyen tac "recall loi khong duoc tut". Da REVERT phan nay,
+    CHI giu lai loai theo PAGE_HOST (node xuat hien tren TRANG CUA CHINH NO) - truong hop
+    nay khong co doi ung ac y tuong duong (mo trang noi bo cua chinh minh khong the "tan
+    cong" ai khac), khac han voi chen script vao mot trang KHAC ma extension khong so huu.
     """
     welcome_hosts = _welcome_tab_external_hosts(events)
+    own_ids = _own_extension_ids(events)
     injected = []
     for act in events.get("dom_activity", []):
         if act.get("type") != "node_injected":
@@ -310,6 +442,8 @@ def detect_script_injection(events: dict) -> dict:
         page_host = _host_of(act.get("page_url", ""))
         if node_host == page_host:
             continue
+        if page_host in own_ids:
+            continue  # FIX #3: node xuat hien tren mot trang NOI BO cua chinh extension
         if page_host in welcome_hosts:
             continue  # Tier-2: script cua chinh trang welcome-tab-vendor, khong phai extension chen
         injected.append({"tag": act.get("tag"), "src": src, "host": node_host})

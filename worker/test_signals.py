@@ -12,7 +12,7 @@ infra trong PRODUCTION, xem HARNESS_HOSTS). Neu dung ".invalid" o day cac assert
 from risk import (
     detect_undeclared_domains, detect_unsolicited_tabs, detect_script_injection,
     detect_local_harvest, detect_beaconing, build_behavioral_report, compute_risk_score,
-    _manifest_declared_hosts, _is_declared_host, _is_known_infra_host,
+    _manifest_declared_hosts, _is_declared_host, _is_known_infra_host, _own_extension_ids,
 )
 
 # events toi gian mo phong canary: SW goi domain la, page goi domain la,
@@ -455,5 +455,96 @@ res = detect_undeclared_domains(ev_wc_declared)
 assert res["has_undeclared"] is False, \
     f"host da khai bao qua wildcard KHONG duoc flag undeclared, duoc {res}"
 print("PASS end-to-end: wildcard declared -> khong con undeclared oan")
+
+print("\n=== TEST FIX #3: script_injection loai node = chinh extension-id (id-robust) ===")
+OWN_ID = "ddbnhhjangoagiipejagamkakncbpipp"
+OTHER_ID = "eiaeiblijfjekdanodkjadfinkhbfgcd"
+
+ev_selfnode = {
+    "manifest": {"name": "sn", "host_permissions": [], "permissions": []},
+    "network_requests": [],
+    "service_workers": [{"url": f"chrome-extension://{OWN_ID}/background.js"}],
+    "dom_activity": [
+        # node xuat hien TREN mot trang noi bo cua CHINH no (page_host=own_id) -> LOAI
+        {"type": "node_injected", "tag": "SCRIPT", "src": "https://cdn.example-lib.io/x.js",
+         "page_url": f"chrome-extension://{OWN_ID}/options.html"},
+        # node co SRC la chinh id extension NHUNG page_url la TRANG THU BA that (khong
+        # phai trang cua chinh no) -> VAN TINH (khong loai theo node_host - xem docstring
+        # detect_script_injection: day chinh la pattern credential-phishing that phat hien
+        # tren malware that, self-hosted payload chen vao trang nan nhan qua
+        # web_accessible_resources, KHONG duoc mien tru chi vi src la "cua chinh minh")
+        {"type": "node_injected", "tag": "SCRIPT",
+         "src": f"chrome-extension://{OWN_ID}/js/bridge.js",
+         "page_url": "https://tiktok.com/"},
+        # node tu mot extension KHAC (id khac) -> VAN TINH (khong phai chinh no)
+        {"type": "node_injected", "tag": "SCRIPT",
+         "src": f"chrome-extension://{OTHER_ID}/evil.js",
+         "page_url": "http://localhost:8888/fake_bank.html"},
+        # node domain ngoai binh thuong -> VAN TINH (hanh vi that, khong lien quan fix #3)
+        {"type": "node_injected", "tag": "SCRIPT", "src": "https://evil-cdn.xyz/y.js",
+         "page_url": "http://localhost:8888/fake_bank.html"},
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_script_injection(ev_selfnode)
+hosts = {n["host"] for n in res["injected_nodes"]}
+assert "cdn.example-lib.io" not in hosts, \
+    f"node tren TRANG noi bo cua chinh no phai bi loai (page_host=own_id), con: {hosts}"
+assert OWN_ID in hosts, \
+    ("node co src=chinh-id NHUNG chen vao TRANG THU BA that (khong phai own page) PHAI van "
+     f"duoc tinh (pattern credential-phishing that, khong duoc mien tru theo node_host), duoc: {hosts}")
+assert OTHER_ID in hosts, "node cua extension KHAC (id khac) van phai duoc tinh"
+assert "evil-cdn.xyz" in hosts, "node domain ngoai binh thuong van phai duoc tinh"
+assert res["count"] == 3, f"3 node con lai (own-id-tren-trang-la + id-khac + domain-ngoai), duoc {res['count']}: {hosts}"
+print("PASS fix#3: CHI loai node tren TRANG noi bo cua chinh no (page_host), "
+      "KHONG loai theo node_host (an toan hon, giu duoc pattern self-payload-vao-trang-la):", hosts)
+
+print("\n=== TEST FIX #2: unsolicited_tab loai tab toi trang NOI BO cua chinh no (id-robust) ===")
+ev_owntab = {
+    "manifest": {"name": "ot", "host_permissions": [], "permissions": []},
+    "network_requests": [],
+    "service_workers": [{"url": f"chrome-extension://{OWN_ID}/background.js"}],
+    "new_tabs": [
+        # tab toi TRANG NOI BO cua chinh no (id THAT, tu service_workers) -> LOAI
+        {"url": f"chrome-extension://{OWN_ID}/setup.html?from=install", "phase": "load"},
+        # tab toi mot extension KHAC (id khac) -> VAN TINH (khong phai chinh no)
+        {"url": f"chrome-extension://{OTHER_ID}/page.html", "phase": "load"},
+        # tab toi domain BEN NGOAI (vendor.com) -> VAN TINH, KHONG name-match du "trong
+        # giong" trang vendor chinh chu (nguyen tac cot loi cua fix #2: khong doan theo ten)
+        {"url": "https://vendor-welcome.example/onboarding", "phase": "load"},
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_unsolicited_tabs(ev_owntab)
+urls = {t["url"] for t in res["unsolicited_tabs"]}
+assert not any(u.startswith(f"chrome-extension://{OWN_ID}/") for u in urls), \
+    f"tab toi trang noi bo cua CHINH no phai bi loai, con: {urls}"
+assert any(u.startswith(f"chrome-extension://{OTHER_ID}/") for u in urls), \
+    "tab toi extension KHAC (id khac) van phai duoc tinh"
+assert "https://vendor-welcome.example/onboarding" in urls, \
+    "tab toi domain BEN NGOAI van phai duoc tinh (KHONG name-match, du 'trong giong' vendor)"
+assert res["count"] == 2, f"chi 2 tab (id-khac + domain-ngoai) con lai, duoc {res['count']}: {urls}"
+print("PASS fix#2: loai tab toi own-page, giu nguyen tab id-khac/domain-ngoai:", urls)
+
+print("\n=== GUARD: malware mo tab external luc install (vd julia-info.kiev.ua) KHONG duoc mien tru ===")
+# Mo phong dung pattern xac nhan tren dataset that: malware mo tab toi C2/tracking BEN
+# NGOAI luc phase=load (giong het "hinh dang" voi welcome-tab benign - chi khac o ban chat
+# domain). Fix #2 CHI dua vao id (chrome-extension://<own-id>), KHONG dua vao "domain co
+# trong giong dich vu/vendor khong" -> tab nay PHAI van bi tinh la unsolicited.
+ev_malware_beacon = {
+    "manifest": {"name": "PageLockerClone", "host_permissions": [], "permissions": []},
+    "network_requests": [],
+    "service_workers": [{"url": f"chrome-extension://{OWN_ID}/background.js"}],
+    "new_tabs": [
+        {"url": f"https://julia-info.kiev.ua/install/{OWN_ID}", "phase": "load"},
+    ],
+    "honeypot_exfil": False, "page_hang_count": 0,
+}
+res = detect_beacon = detect_unsolicited_tabs(ev_malware_beacon)
+assert res["has_unsolicited"] is True, \
+    "GUARD FAIL: tab beacon external luc install cua malware bi mien tru oan - fix #2 sai, phai revert"
+assert res["count"] == 1
+print("PASS guard: tab external luc install (malware-like) VAN giu nguyen tin hieu:",
+      res["unsolicited_tabs"])
 
 print("\nTAT CA PASS")
