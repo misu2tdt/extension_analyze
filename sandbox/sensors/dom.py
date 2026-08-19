@@ -7,6 +7,16 @@ async def _setup_dom_sensor(context, events):
     MutationObserver dat o MAIN WORLD.
     Content script chay o isolated world (JS rieng) NHUNG DOM la CHUNG
     => van thay duoc moi thay doi DOM do content script gay ra.
+
+    FUTURE WORK (chan doan, chua lam - xem LIMITATION "INLINE SCRIPT/IFRAME INJECTION #2"
+    trong worker/risk.py de biet ly do day du): sensor nay CO ghi node inline (SCRIPT/IFRAME/
+    FORM khong co `.src`, xem `src = n.src || n.action || '(inline)'` ben duoi) nhung (a)
+    KHONG capture noi dung (`textContent`/`innerHTML`), chi co `tag` + chuoi hang `"(inline)"`,
+    va (b) dedup key `tag + '|' + src` bien thanh HANG SO cho moi node inline tren 1 trang =>
+    sau node inline DAU TIEN, cac injection inline TIEP THEO (noi dung khac) bi drop het.
+    Muon bat inline injection dang ngo (an toan, khong no FP tren inline binh thuong nhu GA/
+    config) can: capture noi dung (truncate), doi dedup key, VA co provenance nguon (content-
+    script vs chinh trang) - ngoai pham vi cam bien hien tai.
     """
     async def _report(source, payload):
         try:

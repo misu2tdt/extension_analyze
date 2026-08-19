@@ -190,7 +190,33 @@ async def _cdp_sw_sensor(events, stop_evt, port=REMOTE_DEBUG_PORT):
                     info = pr.get("targetInfo", {})
                     sid = pr.get("sessionId")
                     ttype = info.get("type")
-                    if ttype in ("service_worker", "worker"):
+                    url = info.get("url", "")
+                    # FIX #1 (GD1 review, Codex+Claude Code dong thuan, severity cao nhat):
+                    # TRUOC day moi target type "service_worker" HOAC "worker" deu duoc coi
+                    # la SW CUA EXTENSION - nhung mot TRANG THUONG cung co the tao dedicated/
+                    # shared worker (type "worker", url http/https cua TRANG, khong phai
+                    # extension) - CDP Target.setAutoAttach gom ca 2. Khi đo bi gan nham vao
+                    # sw_sessions, request cua worker-trang-tao bi ghi origin="service_worker"
+                    # trong network_requests => undeclared_domain_contact tinh SAI domain cua
+                    # TRANG thanh domain do EXTENSION SW goi (undeclared_from_sw oan).
+                    #
+                    # QUYET DINH (mac dinh, ghi ro): CHI type "service_worker" VA url bat dau
+                    # "chrome-extension://" moi duoc coi la SW cua extension. Type "worker"
+                    # KHONG BAO GIO duoc coi la extension SW du url cua no co the la
+                    # chrome-extension:// (hiem - dedicated worker do CHINH SW cua extension
+                    # tu tao qua `new Worker()` trong background.js) - truong hop nay BI BO SOT
+                    # co chu dich, vi phan biet "worker do SW-cua-extension tao" vs "worker do
+                    # SW-cua-trang tao" can theo doi parent target (CDP khong tra thang truong
+                    # nay o attachedToTarget), ngoai pham vi fix nay. Chap nhan bo sot hiem hon
+                    # la gan nham pho bien (trade-off ro rang, uu tien AN TOAN).
+                    is_ext_sw = (ttype == "service_worker" and url.startswith("chrome-extension://"))
+                    if ttype == "service_worker" and not url:
+                        # url rong/thieu luc attach (hiem, vd target chua kip populate) - THA
+                        # BO SOT con hon gan sai: KHONG them vao sw_sessions, chi ghi log de
+                        # phat hien neu xay ra thuong xuyen tren du lieu that.
+                        events["errors"].append(
+                            f"cdp_sw_missing_url_at_attach: sessionId={sid} type={ttype}")
+                    if is_ext_sw:
                         sw_sessions.add(sid)
                     if ttype in ("service_worker", "worker", "page", "iframe"):
                         # Phai bat Network + tha debugger cho MOI target de no chay tiep.

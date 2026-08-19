@@ -80,6 +80,35 @@ ten/description/icon voi danh sach thuong hieu pho bien + kiem tra publisher/dom
 thuoc chinh chu hay khong) - day la huong khac hoan toan voi 5 tin hieu dynamic hien co,
 ghi nhan la future work, KHONG ep vao pham vi file nay.
 ========================================================================================
+
+==================== FUTURE WORK: INLINE SCRIPT/IFRAME INJECTION (#2) ====================
+`detect_script_injection` CHU Y bo qua node inline (`src == "(inline)"`, tuc SCRIPT/IFRAME
+duoc them vao DOM qua `textContent`/`innerHTML` thay vi thuoc tinh `src`). Day la loai bo
+CO CHU DICH, KHONG phai thieu sot vo tinh - chan doan (doc `sandbox/sensors/dom.py`, xem
+docstring `_setup_dom_sensor` o do) cho thay CHUA THE bat inline injection mot cach an toan,
+vi 3 ly do gop lai:
+
+  (a) `dom.py` hien chi ghi METADATA (`tag`, `src="(inline)"`), KHONG ghi NOI DUNG script
+      (`textContent`/`innerHTML`) - du co muon ap dung heuristic phan biet "inline dang ngo"
+      (chua eval/atob/fetch/document.cookie) voi "inline binh thuong" (analytics/config inline
+      RAT PHO BIEN tren trang web thuong) thi risk.py cung KHONG CO DU LIEU de lam.
+  (b) dedup key trong MutationObserver la `tag + '|' + src` (`dom.py` dong ~41) - voi node
+      inline, `src` LUON la chuoi hang `"(inline)"`, nen dedup key la HANG SO cho moi
+      SCRIPT/IFRAME/FORM inline tren CUNG 1 trang - SAU node inline DAU TIEN, moi injection
+      inline TIEP THEO (noi dung khac han) bi drop, khong bao gio duoc ghi lai.
+  (c) Thieu DOM-channel provenance (tuong tu GD3 da lam cho network - phan biet request do
+      extension hay do TRANG khoi tao): khong co co che phan biet inline script do CONTENT
+      SCRIPT cua extension chen vs do CHINH TRANG tu viet (vd Google Analytics inline,
+      config JSON inline trong <script> - cai nay RAT PHO BIEN tren web thuong). Neu bat MOI
+      inline injection ma khong co provenance nay, FP se no (moi trang co GA/GTM/config inline
+      deu bi flag).
+
+De trien khai #2 AN TOAN can sua `dom.py` (khong chi risk.py): (1) capture noi dung inline
+(truncate, vd 500 ky tu dau) qua `_report`, (2) doi dedup key sang hash(tag+content) thay vi
+tag+src, (3) can nhac them provenance nguon (isolated-world content-script vs main-world
+trang) tuong tu co che da co cho network (`request_provenance`). Day la sensor surgery sau
+hon pham vi cac fix hien tai, chua lam trong cac dot nay - ghi nhan future work.
+========================================================================================
 """
 import statistics
 from urllib.parse import urlparse
