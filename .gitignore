@@ -45,3 +45,9 @@ smoke_out_timeout/
 
 # Eval results (nang, khong track)
 eval/results/
+
+# PoC scratch (giai nen CRX + Chromium profile tam)
+eval/_poc/
+
+# Verify scratch (giai nen CRX benign that de doi chieu, khong track)
+eval/_verify/
